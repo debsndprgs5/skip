@@ -547,6 +547,20 @@ class ContextImpl implements Context {
     return new EagerCollectionImpl<K, V>(collection, this.refs);
   }
 
+  useLazyExternalResource<K extends Json, V extends Json>(resource: {
+    service: string;
+    identifier: string;
+    params?: Json;
+  }): LazyCollection<K, V> {
+    const collection =
+      this.refs.binding.SkipRuntime_Context__useLazyExternalResource(
+        resource.service,
+        resource.identifier,
+        this.refs.json().exportJSON(resource.params ?? {}),
+      );
+    return new LazyCollectionImpl<K, V>(collection, this.refs);
+  }
+
   jsonExtract(value: JsonObject, pattern: string): Json[] {
     const skjson = this.refs.json();
     return skjson.importJSON(

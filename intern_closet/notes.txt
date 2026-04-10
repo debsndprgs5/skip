@@ -1,0 +1,38 @@
+Modifs 10/04
+
+- api.ts, modif les trucs vu hier : LazyExternalService supprimé,
+- ExternalService gere maintenant eager et lazy
+- ExternalService est tjr une interface avec fetch? et initLazy? en attendant que daniel valide le changement en type pour que :
+- ---- ExternalService soit maintenant un type, pour pouvoir en faire un type union et obliger user a utiliser fetch et lazyInit si il utilise du lazy
+- useExternalResource modif et enlevé la surcharge pour en faire une autre ft useLazyExternalResource
+- ajouté Context_useLazyExternalResource dans le binding.ts pour que l'index.ts l'appelle
+- implementé useLazyExternalResource dans le ContextImpl de l'index qui appelle SkipRuntime_Context__useLazyExternalResource de FFI.sk
+- ajouté SkipRuntime_Context__useLazyExternalResource et son export dans FFI.sk, qui appelle useLazyExternalCollection du SkipRuntime
+- ajouté fetch et initLazy dans FFI.sk, et leur fetchOfservice et initLazyOfservice
+A faire/finir
+- --- ajouter le LazyCompute special qui appelle fetch sur le service externe quand une cle est demandée dans Runtime.sk
+- --- ajouter useLazyExternalCollection dans le Runtime.sk qui crée la TLazyDir avec le LazyCompute particulier et qui appelle initLazy sur le service externe en lui passant invalidate
+- --- tojs.cc mode natif a modifier, ajouter la declaration C++ de SkipRuntime_Context__useLazyExternalResource
+- tojs.cc ajouter la ft C++ qui fait le pont : traduit les types JS vers C et appelle la fonction Skiplang, et enregistrer cette fonction dans le binding via AddFunction
+- --- skipruntime_module.ts mode WASM a modif, ajouter la declaration de SkipRuntime_Context__useLazyExternalResource dans l'interface FromWasm, et implementer la methode dans la classe qui traduit les strings et appelle fromWasm
+
+
+Flow index -> runtime
+
+index.ts (ContextImpl)
+    ↓ appelle this.refs.binding.SkipRuntime_Context__useExternalResource
+binding.ts
+    ↓ déclare le contrat
+        ↙ mode natif          ↘ mode WASM
+tojs.cc                skipruntime_module.ts
+    ↓                          ↓
+FFI.sk (@export)       FFI.sk (@export)
+    ↓
+Runtime.sk (useExternalCollection)
+
+----------
+
+Runtime.sk  ← 1. la vraie logique
+FFI.sk      ← 2. l'export vers l'extérieur  
+tojs.cc     ← 3. pont natif C++
+skipruntime_module.ts ← 4. pont WASM

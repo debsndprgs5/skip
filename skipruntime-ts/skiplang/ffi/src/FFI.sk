@@ -232,6 +232,21 @@ native fun subscribeOfService(
   params: SKJSON.CJSON,
 ): Float;
 
+@cpp_extern("SkipRuntime_ServiceDefinition__fetch")
+@debug
+native fun fetchOfService(
+  service: UInt32,
+  supplier: String,
+  key: SKJSON.CJSON,
+): Float;
+
+@cpp_extern("SkipRuntime_ServiceDefinition__initLazy")
+@debug
+native fun initLazyOfService(
+  service: UInt32,
+  supplier: String,
+): Float;
+
 @cpp_extern("SkipRuntime_ServiceDefinition__unsubscribe")
 @debug
 native fun unsubscribeOfService(
@@ -303,6 +318,30 @@ class ExternService(eptr: SKStore.ExternalPointer) extends Service {
 
   fun shutdown(): Waitable {
     Waitable(shutdownOfService(this.eptr.value))
+  }
+
+  fun fetch(
+    supplier: String,
+    key: SKJSON.CJSON,
+  ): Waitable {
+    Waitable(
+      fetchOfService(
+        this.eptr.value,
+        supplier,
+        key,
+      ),
+    )
+  }
+
+  fun initLazy(
+    supplier: String,
+  ): Waitable {
+    Waitable(
+      initLazyOfService(
+        this.eptr.value,
+        supplier,
+      ),
+    )
   }
 
   fun needResourceReload(name: String): ?Bool {
@@ -794,6 +833,15 @@ fun useExternalResource(
   params: SKJSON.CJSON,
 ): String {
   useExternalCollection(service, identifier, params).getId()
+}
+
+@export("SkipRuntime_Context__useLazyExternalResource")
+fun useLazyExternalResource(
+  service: String,
+  identifier: String,
+  params: SKJSON.CJSON,
+): String {
+  useLazyExternalCollection(service, identifier, params).getId()
 }
 
 /************ initService ****************/

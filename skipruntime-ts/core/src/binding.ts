@@ -216,4 +216,10 @@ export interface FromBinding {
     identifier: string,
     params: Pointer<Internal.CJObject>,
   ): string;
+
+  SkipRuntime_Context__useLazyExternalResource(
+    service: string,
+    identifier: string,
+    params: Pointer<Internal.CJObject>,
+  ): string;  
 }
