@@ -446,6 +446,67 @@ fun createLazyCollection(compute: LazyCompute): LazyCollection {
   }
 }
 
+/**
+ * LazyCompute implementation for external lazy services.
+ * When a key is requested, immediately returns a loading state
+ * and triggers an async fetch on the external service.
+ * Once the fetch completes, the cached loading value must be
+ * invalidated via invalidateLazyKey so the next request returns
+ * the real value.
+ */
+class ExternalServiceLazyCompute(
+  service: Service,
+  supplier: String,
+) extends LazyCompute {
+  fun computeFor(
+    _self: LazyCollection,
+    key: SKJSON.CJSON,
+  ): Array<SKJSON.CJSON> {
+    getContext() match {
+    | Some(context) ->
+      waitable = this.service.fetch(this.supplier, key);
+      addSubscription(context, waitable);
+      Array[
+        SKJSON.CJObject(
+          SKJSON.CJFields::create(
+            Array[("type", SKJSON.CJString("loading"))],
+            x -> x,
+          ),
+        ),
+      ]
+    | _ -> invariant_violation("Store context must be specified.")
+    }
+  }
+
+  fun getName(): String {
+    `external_lazy_${this.supplier}`
+  }
+
+  fun ==(other: SKStore.LazyCompute<SKStore.Key, SKStore.File>): Bool {
+    other match {
+    | ExternalServiceLazyCompute(_, supplier) -> supplier == this.supplier
+    | _ -> false
+    }
+  }
+}
+
+/**
+ * Invalidate a cached key in a lazy collection.
+ * Marks the entry as removed so that the next request
+ * for this key triggers a fresh call to computeFor.
+ * Should be called after a fetch completes to replace
+ * the loading state with the real value.
+ */
+
+fun invalidateLazyKey(dirName: SKStore.DirName, key: SKJSON.CJSON): void {
+  getContext() match {
+  | Some(context) ->
+    dir = context.unsafeGetLazyDir(dirName).typed(); // get the lazydir
+    dir.invalidateKey(JSONID(key), context) // invalidate the key in the lazydir
+  | _ -> invariant_violation("Store context must be specified.")
+  }
+}
+
 fun jsonExtract(from: SKJSON.CJObject, pattern: String): Array<SKJSON.CJSON> {
   fieldsList = SKJSON.PatternParser::mcreate(pattern)
     .toplevelPattern()
@@ -533,6 +594,26 @@ fun useExternalCollection(
   }
 }
 
+fun useLazyExternalCollection(
+  supplier: String,
+  _identifier: String,
+  _params: SKJSON.CJSON,
+): LazyCollection {
+  getContext() match {
+  | Some(context) ->
+    sessionHdl = SKStore.EHandle(
+      SKStore.UnitID::keyType,
+      ServiceDefinition::type,
+      kSessionDir,
+    );
+    service = sessionHdl.get(context, SKStore.UnitID::singleton).service;
+    compute = ExternalServiceLazyCompute(service, supplier);
+    dirName = subDirName(context, compute.getName(), None());
+    _ = SKStore.TLazyDir::createFor(context, dirName, compute);
+    LazyCollection(dirName)
+  | _ -> invariant_violation("Store context must be specified.")
+  }
+}
 
 class Collection(dirName: SKStore.DirName) {
   //

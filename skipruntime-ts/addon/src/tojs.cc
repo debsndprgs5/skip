@@ -26,7 +26,8 @@ SKReducer SkipRuntime_createReducer(int32_t ref);
 
 CJSON SkipRuntime_initService(SKService service);
 double SkipRuntime_closeService();
-
+char* SkipRuntime_Context__useLazyExternalResource(char* service, char* identifier, CJObject json);
+double SkipRuntime_ServiceDefinition__fetch(int32_t service, char* supplier, CJObject key);
 CJArray SkipRuntime_Collection__getArray(char* collection, CJSON key);
 char* SkipRuntime_Collection__map(char* collection, SKMapper mapper);
 char* SkipRuntime_Collection__mapReduce(char* collection, SKMapper mapper,
@@ -190,6 +191,68 @@ void UseExternalResourceOfContext(const FunctionCallbackInfo<Value>& args) {
         ToSKString(isolate, args[1].As<String>()),
         args[2].As<External>()->Value());
     args.GetReturnValue().Set(FromUtf8(isolate, skcollection));
+  });
+}
+
+void UseLazyExternalResourceOfContext(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  HandleScope scope(isolate);
+  if (args.Length() != 3) {
+    // Throw an Error that is passed back to JavaScript
+    isolate->ThrowException(
+        Exception::TypeError(FromUtf8(isolate, "Must have three parameters.")));
+    return;
+  };
+  if (!args[0]->IsString() || !args[1]->IsString()) {
+    // Throw an Error that is passed back to JavaScript
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "The first and second parameters must be string.")));
+    return;
+  }
+  if (!args[2]->IsExternal()) {
+    // Throw an Error that is passed back to JavaScript
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "The third parameter must be pointer.")));
+    return;
+  }
+  NatTryCatch(isolate, [&args](Isolate* isolate) {
+    char* skcollection = SkipRuntime_Context__useLazyExternalResource(
+        ToSKString(isolate, args[0].As<String>()),
+        ToSKString(isolate, args[1].As<String>()),
+        args[2].As<External>()->Value());
+    args.GetReturnValue().Set(FromUtf8(isolate, skcollection));
+  });
+}
+
+void FetchOfServiceDefinition(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  HandleScope scope(isolate);
+  if (args.Length() != 3) {
+    isolate->ThrowException(
+        Exception::TypeError(FromUtf8(isolate, "Must have three parameters.")));
+    return;
+  };
+  if (!args[0]->IsNumber()) {
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "The first parameter must be a number.")));
+    return;
+  }
+  if (!args[1]->IsString()) {
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "The second parameter must be a string.")));
+    return;
+  }
+  if (!args[2]->IsExternal()) {
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "The third parameter must be a pointer.")));
+    return;
+  }
+  NatTryCatch(isolate, [&args](Isolate* isolate) {
+    double skresult = SkipRuntime_ServiceDefinition__fetch(
+        args[0].As<Int32>()->Value(),
+        ToSKString(isolate, args[1].As<String>()),
+        args[2].As<External>()->Value());
+    args.GetReturnValue().Set(Number::New(isolate, skresult));
   });
 }
 
@@ -990,6 +1053,10 @@ void GetToJSBinding(const FunctionCallbackInfo<Value>& args) {
               JSONExtractOfContext);
   AddFunction(isolate, binding, "SkipRuntime_Context__useExternalResource",
               UseExternalResourceOfContext);
+  AddFunction(isolate, binding, "SkipRuntime_Context__useLazyExternalResource",
+              UseLazyExternalResourceOfContext);
+  AddFunction(isolate, binding, "SkipRuntime_ServiceDefinition__fetch",
+              FetchOfServiceDefinition);
   //
   AddFunction(isolate, binding, "SkipRuntime_createMapper", CreateMapper);
   AddFunction(isolate, binding, "SkipRuntime_createLazyCompute",

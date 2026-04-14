@@ -227,6 +227,12 @@ export interface FromWasm {
     identifier: ptr<Internal.String>,
     params: ptr<Internal.CJSON>,
   ): ptr<Internal.String>;
+
+  SkipRuntime_Context__useLazyExternalResource(
+    service: ptr<Internal.String>,
+    identifier: ptr<Internal.String>,
+    params: ptr<Internal.CJSON>,
+  ): ptr<Internal.String>;
 }
 
 interface ToWasm {
@@ -327,6 +333,12 @@ interface ToWasm {
     external: ptr<Internal.String>,
     instance: ptr<Internal.String>,
   ): void;
+
+  SkipRuntime_ServiceDefinition__fetch(
+    skservice: Handle<ServiceDefinition>,
+    supplier: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): Handle<Promise<void>>;
 
   SkipRuntime_ServiceDefinition__shutdown(
     skservice: Handle<ServiceDefinition>,
@@ -749,6 +761,20 @@ export class WasmFromBinding implements FromBinding {
       ),
     );
   }
+
+  SkipRuntime_Context__useLazyExternalResource(
+    service: string,
+    identifier: string,
+    params: Pointer<Internal.CJSON>,
+  ): string {
+    return this.utils.importString(
+      this.fromWasm.SkipRuntime_Context__useLazyExternalResource(
+        this.utils.exportString(service),
+        this.utils.exportString(identifier),
+        toPtr(params),
+      ),
+    );
+  }
 }
 
 class LinksImpl implements Links {
@@ -968,6 +994,18 @@ class LinksImpl implements Links {
     );
   }
 
+  fetchOfServiceDefinition(
+    skservice: Handle<ServiceDefinition>,
+    supplier: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): Handle<Promise<void>> {
+    return this.tobinding.SkipRuntime_ServiceDefinition__fetch(
+      skservice,
+      this.utils.importString(supplier),
+      key,
+    );
+  }
+
   shutdownOfServiceDefinition(
     skservice: Handle<ServiceDefinition>,
   ): Handle<Promise<unknown>> {
@@ -1159,6 +1197,8 @@ class Manager implements ToWasmManager {
       links.subscribeOfServiceDefinition.bind(links);
     toWasm.SkipRuntime_ServiceDefinition__unsubscribe =
       links.unsubscribeOfServiceDefinition.bind(links);
+    toWasm.SkipRuntime_ServiceDefinition__fetch =
+      links.fetchOfServiceDefinition.bind(links);
     toWasm.SkipRuntime_ServiceDefinition__shutdown =
       links.shutdownOfServiceDefinition.bind(links);
     toWasm.SkipRuntime_deleteService = links.deleteService.bind(links);

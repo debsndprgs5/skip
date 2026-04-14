@@ -97,6 +97,18 @@ class TLazyDir{
     (refCountsOpt, dirOpt)
   }
 
+  fun invalidateKey(key: Key, context: mutable Context): void {
+    this.data.maybeGet(key) match {
+    | Some(SKStore.LDefined(_, reads)) -> // if the key is cached, get the dependencies
+      !this.data[key] = SKStore.LRemoved(reads); // mark the key as removed, keep dependencies
+      context.updateDirtyReaders( // notify skip that the key has changed
+        SKStore.Path::create(this.dirName, key),
+      );
+      context.setDir(this) // set back the TLazyDir in context
+    | _ -> void
+    }
+  }
+
   protected fun removeKeys(keys: readonly Vector<Key>): this {
     data = this.data;
     for (key in keys) {

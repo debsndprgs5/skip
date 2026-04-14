@@ -232,6 +232,14 @@ native fun subscribeOfService(
   params: SKJSON.CJSON,
 ): Float;
 
+@cpp_extern("SkipRuntime_ServiceDefinition__unsubscribe")
+@debug
+native fun unsubscribeOfService(
+  service: UInt32,
+  supplier: String,
+  instance: String,
+): void;
+
 @cpp_extern("SkipRuntime_ServiceDefinition__fetch")
 @debug
 native fun fetchOfService(
@@ -240,20 +248,9 @@ native fun fetchOfService(
   key: SKJSON.CJSON,
 ): Float;
 
-@cpp_extern("SkipRuntime_ServiceDefinition__initLazy")
+@cpp_extern("SkipRuntime_deleteLazyService")
 @debug
-native fun initLazyOfService(
-  service: UInt32,
-  supplier: String,
-): Float;
-
-@cpp_extern("SkipRuntime_ServiceDefinition__unsubscribe")
-@debug
-native fun unsubscribeOfService(
-  service: UInt32,
-  supplier: String,
-  instance: String,
-): void;
+native fun deleteLazyService(service: UInt32): void;
 
 @cpp_extern("SkipRuntime_ServiceDefinition__shutdown")
 @debug
@@ -316,32 +313,12 @@ class ExternService(eptr: SKStore.ExternalPointer) extends Service {
     unsubscribeOfService(this.eptr.value, supplier, instance)
   }
 
+  fun fetch(supplier: String, key: SKJSON.CJSON): Waitable {
+    Waitable(fetchOfService(this.eptr.value, supplier, key))
+  }
+
   fun shutdown(): Waitable {
     Waitable(shutdownOfService(this.eptr.value))
-  }
-
-  fun fetch(
-    supplier: String,
-    key: SKJSON.CJSON,
-  ): Waitable {
-    Waitable(
-      fetchOfService(
-        this.eptr.value,
-        supplier,
-        key,
-      ),
-    )
-  }
-
-  fun initLazy(
-    supplier: String,
-  ): Waitable {
-    Waitable(
-      initLazyOfService(
-        this.eptr.value,
-        supplier,
-      ),
-    )
   }
 
   fun needResourceReload(name: String): ?Bool {

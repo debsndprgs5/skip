@@ -365,19 +365,17 @@ export interface Context {
 
   /**
    * Create a lazy reactive collection populated from a resource managed by an external service.
-   * The external service must implement ExternalService.fetch and ExternalService.initLazy
+   * The external service must implement {@link LazyExternalService}.
    *
    * @typeParam K - Type of keys.
    * @typeParam V - Type of values.
-   * @param resource - External resource configuration.
-   * @param resource.lazy - Must be `true` to use lazy mode.
    * @returns A lazy reactive collection of the external resource.
    */
   useLazyExternalResource<K extends Json, V extends Json>(resource: {
     service: string;
     identifier: string;
     params?: Json;
-  }): LazyCollection<K, V>;
+  }): LazyCollection<K, AsyncResult<V>>;
 
   jsonExtract(value: JsonObject, pattern: string): Json[];
 }
@@ -463,27 +461,6 @@ export interface ExternalService {
    */
   unsubscribe(instance: string): void;
 
-  /**  
-   * Optionnal Lazy support
-   * @param callbacks.invalidate - Invalidate one or more cached key.
-   * @param callbacks.error - Error callback to log the error that prevent an idermetiate update.
-   * Must be implemented together with `fetch`
-   **/
-  initLazy?(callbacks: {
-    invalidate: (keys: Json[]) => Promise<void>;
-    error: (error: unknown) => void;
-  }): Promise<void>;
-
-  /**
-   * Fetch the values associated to a key from the external resource.
-   * Called by Skip when a lazy collection needs a value that is not yet cached.
-   *
-   * @param key - The key to fetch from the external resource.
-   * @returns The values associated to the key.
-   * Must be implemented together with `initLazy`
-   */
-  fetch?(key: Json): Promise<Json[]>;
-  
   /**
    * Shutdown the external service.
    *
@@ -492,68 +469,49 @@ export interface ExternalService {
   shutdown(): Promise<void>;
 }
 
-// Potential Type ExternalService
-// export type ExternalService = {
-//   /**
-//    * Subscribe to a resource provided by the external service.
-//    *
-//    * @param instance - Instance identifier of the external resource.
-//    * @param resource - Name of the external resource.
-//    * @param params - Parameters of the external resource.
-//    * @param callbacks - Callbacks to react on error/update.
-//    * @param callbacks.error - Error callback to log the error that prevent an idermetiate update.
-//    * @param callbacks.update - Update callback.
-//    * @returns {void}
-//    */
-//   subscribe(
-//     instance: string,
-//     resource: string,
-//     params: Json,
-//     callbacks: {
-//       update: (updates: Entry<Json, Json>[], isInit: boolean) => Promise<void>;
-//       error: (error: unknown) => void;
-//     },
-//   ): Promise<void>;
+export type ALoading<T> = { type: "loading"; payload?: T };
+export type AValue<T> = { type: "value"; payload: T };
+export type AError<T> = { type: "error"; payload?: T };
 
-//   /**
-//    * Unsubscribe from a resource provided by the external service.
-//    *
-//    * @param instance - Instance identifier of the external resource.
-//    * @returns {void}
-//    */
-//   unsubscribe(instance: string): void;
+export type AsyncResult<T> = ALoading<T> | AValue<T> | AError<T>;
 
-//   /**
-//    * Shutdown the external service.
-//    *
-//    * @returns {void}
-//    */
-//   shutdown(): Promise<void>;
-// } & (
-// | { initLazy?: never; fetch?: never}
-// | {
-//   /**  
-//    * Optionnal Lazy support
-//    * @param callbacks.invalidate - Invalidate one or more cached key.
-//    * @param callbacks.error - Error callback to log the error that prevent an idermetiate update.
-//    * Must be implemented together with `fetch`
-//    **/
-//     initLazy(callbacks: {
-//       invalidate: (keys: Json[]) => Promise<void>;
-//       error: (error: unknown) => void;
-//     }): Promise<void>;
+/**
+ * Interface to a lazy external service.
+ *
+ * Lazy external services are queried on-demand when a key is requested
+ * from a LazyCollection, as opposed to pushing updates eagerly.
+ *
+ * `Context.useLazyExternalResource` accepts the name of a lazy external service,
+ * which must be associated to an instance of this `LazyExternalService` interface
+ * by `SkipService.lazyExternalServices`.
+ */
+export interface LazyExternalService {
+  /**
+   * Fetch the values associated to a key from the external resource.
+   * Called by Skip when a lazy collection needs a value that is not yet cached.
+   * The result is returned asynchronously via the `update` callback.
+   *
+   * @param key - The key to fetch from the external resource.
+   * @param callbacks - Callbacks to react on update/error.
+   * @param callbacks.update - Update callback, not yet implemented.
+   * @param callbacks.error - Error callback.
+   * @returns {void}
+   */
+  fetch(
+    key: Json,
+    callbacks: {
+      update: (values: Json[]) => Promise<void>; //not implemented yet
+      error: (error: unknown) => void;
+    },
+  ): Promise<void>;
 
-//   /**
-//    * Fetch the values associated to a key from the external resource.
-//    * Called by Skip when a lazy collection needs a value that is not yet cached.
-//    *
-//    * @param key - The key to fetch from the external resource.
-//    * @returns The values associated to the key.
-//    * Must be implemented together with `initLazy`
-//    */
-//     fetch(key: Json): Promise<Json[]>;
-//   }
-// );
+  /**
+   * Shutdown the external service.
+   *
+   * @returns {void}
+   */
+  shutdown(): Promise<void>;
+}
 
 /**
  * Association of names to collections.
@@ -654,6 +612,9 @@ export interface SkipService<
 
   /** External services that may be used by this service's reactive computation. */
   externalServices?: { [name: string]: ExternalService };
+
+  /** Lazy external services that may be used by this service's reactive computation. */
+  lazyExternalServices?: { [name: string]: LazyExternalService };
 
   /** Reactive resources which constitute the public interface of this reactive service. */
   resources: {

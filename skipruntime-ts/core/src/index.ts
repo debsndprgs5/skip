@@ -37,6 +37,8 @@ import {
   type SkipService,
   type Watermark,
   type ExternalService,
+  type LazyExternalService,
+  type AsyncResult,
 } from "./api.js";
 
 import {
@@ -100,6 +102,10 @@ export class ServiceDefinition {
   constructor(
     private service: SkipService,
     private readonly externals: Map<string, ExternalService> = new Map(),
+    private readonly lazyExternals: Map<
+      string,
+      LazyExternalService
+    > = new Map(),
   ) {}
 
   buildResource(name: string, parameters: Json): Resource {
@@ -169,8 +175,30 @@ export class ServiceDefinition {
     this.externals.delete(`${external}/${instance}`);
   }
 
+  fetch(external: string, key: Json): Promise<void> {
+    if (!this.service.lazyExternalServices)
+      throw new Error(`No lazy external services defined.`);
+    const supplier = this.service.lazyExternalServices[external];
+    if (!supplier)
+      throw new Error(`Lazy external service '${external}' not exist.`);
+    return new Promise((resolve, reject) => {
+      setTimeout(() => {
+        supplier
+          .fetch(key, {
+            update: (_values) => {
+              throw new Error("not implemented");
+            },
+            error: (_) => {},
+          })
+          .then(resolve)
+          .catch(reject);
+      }, 0);
+    });
+  }
+
   async shutdown(): Promise<void> {
     const promises: Promise<void>[] = [];
+
     const uniqueServices = new Set(this.externals.values());
     if (this.service.externalServices) {
       for (const es of Object.values(this.service.externalServices)) {
@@ -180,11 +208,26 @@ export class ServiceDefinition {
     for (const es of uniqueServices) {
       promises.push(es.shutdown());
     }
+
+    const uniqueLazyServices = new Set(this.lazyExternals.values());
+    if (this.service.lazyExternalServices) {
+      for (const es of Object.values(this.service.lazyExternalServices)) {
+        uniqueLazyServices.add(es);
+      }
+    }
+    for (const es of uniqueLazyServices) {
+      promises.push(es.shutdown());
+    }
+
     await Promise.all(promises);
   }
 
   derive(service: SkipService): ServiceDefinition {
-    return new ServiceDefinition(service, new Map(this.externals));
+    return new ServiceDefinition(
+      service,
+      new Map(this.externals),
+      new Map(this.lazyExternals),
+    );
   }
 }
 
@@ -551,14 +594,14 @@ class ContextImpl implements Context {
     service: string;
     identifier: string;
     params?: Json;
-  }): LazyCollection<K, V> {
+  }): LazyCollection<K, AsyncResult<V>> {
     const collection =
       this.refs.binding.SkipRuntime_Context__useLazyExternalResource(
         resource.service,
         resource.identifier,
         this.refs.json().exportJSON(resource.params ?? {}),
       );
-    return new LazyCollectionImpl<K, V>(collection, this.refs);
+    return new LazyCollectionImpl<K, AsyncResult<V>>(collection, this.refs);
   }
 
   jsonExtract(value: JsonObject, pattern: string): Json[] {
@@ -1221,6 +1264,17 @@ export class ToBinding {
   ): void {
     const service = this.handles.get(skservice);
     service.unsubscribe(external, instance);
+  }
+
+  SkipRuntime_ServiceDefinition__fetch(
+    skservice: Handle<ServiceDefinition>,
+    external: string,
+    key: Pointer<Internal.CJSON>,
+  ): Handle<Promise<void>> {
+    const skjson = this.getJsonConverter();
+    const service = this.handles.get(skservice);
+    const jsonKey = skjson.importJSON(key, true) as Json;
+    return this.handles.register(service.fetch(external, jsonKey));
   }
 
   SkipRuntime_ServiceDefinition__shutdown(

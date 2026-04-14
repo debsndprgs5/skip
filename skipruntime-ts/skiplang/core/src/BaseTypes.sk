@@ -143,6 +143,9 @@ base class Service {
   fun needResourceReload(name: String): ?Bool;
   fun needInputReload(name: String): Bool;
   fun needExternalServiceReload(external: String, resource: String): Bool;
+
+  //for Lazy service
+  fun fetch(supplier: String, key: SKJSON.CJSON): Waitable;
 }
 
 value class Values(

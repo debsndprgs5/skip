@@ -221,5 +221,5 @@ export interface FromBinding {
     service: string,
     identifier: string,
     params: Pointer<Internal.CJObject>,
-  ): string;  
+  ): string;
 }
