@@ -245,8 +245,17 @@ native fun unsubscribeOfService(
 native fun fetchOfService(
   service: UInt32,
   supplier: String,
+  dirName: String,
   key: SKJSON.CJSON,
 ): Float;
+
+@cpp_extern("SkipRuntime_ServiceDefinition__getStoredResult")
+@debug
+native fun getStoredResultOfService(
+  service: UInt32,
+  supplier: String,
+  key: SKJSON.CJSON,
+): ?SKJSON.CJSON;
 
 @cpp_extern("SkipRuntime_deleteLazyService")
 @debug
@@ -313,8 +322,16 @@ class ExternService(eptr: SKStore.ExternalPointer) extends Service {
     unsubscribeOfService(this.eptr.value, supplier, instance)
   }
 
-  fun fetch(supplier: String, key: SKJSON.CJSON): Waitable {
-    Waitable(fetchOfService(this.eptr.value, supplier, key))
+  fun fetch(supplier: String, dirName: String, key: SKJSON.CJSON): Waitable {
+    Waitable(fetchOfService(this.eptr.value, supplier, dirName, key))
+  }
+
+  fun getStoredResult(supplier: String, key: SKJSON.CJSON): ?Array<SKJSON.CJSON> {
+    getStoredResultOfService(this.eptr.value, supplier, key) match {
+    | Some(SKJSON.CJArray(values)) -> Some(values)
+    | Some(_) -> None()  // unexpected type
+    | None() -> None()
+    }
   }
 
   fun shutdown(): Waitable {
@@ -474,6 +491,17 @@ fun sizeOfCollection(collection: String): Int {
 @export("SkipRuntime_LazyCollection__getArray")
 fun getArrayOfLazyCollection(lazy: String, key: SKJSON.CJSON): SKJSON.CJArray {
   SKJSON.CJArray(lazyForName(lazy).getArray(key))
+}
+
+@export("SkipRuntime_invalidateLazyKey")
+fun exportInvalidateLazyKey(dirName: String, key: SKJSON.CJSON): void {
+  _ = runWithResult(context ~> {
+    SkipRuntime.invalidateLazyKeyInContext(
+      context,
+      SKStore.DirName::create(dirName),
+      key,
+    )
+  });
 }
 
 /************  Notifier ****************/

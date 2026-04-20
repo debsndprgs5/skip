@@ -64,6 +64,17 @@ export interface FromWasm {
     ref: Handle<HandlerInfo<LazyCompute<K, V>>>,
   ): ptr<Internal.LazyCompute>;
 
+  SkipRuntime_invalidateLazyKey(
+    dirName: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): void;
+
+  SkipRuntime_ServiceDefinition__getStoredResult(
+    skservice: Handle<ServiceDefinition>,
+    supplier: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): Nullable<ptr<Internal.CJSON>>;
+
   // ExternalService
 
   SkipRuntime_createExternalService(
@@ -284,6 +295,12 @@ interface ToWasm {
     mapper: Handle<HandlerInfo<JSONLazyCompute>>,
   ): void;
 
+  SkipRuntime_ServiceDefinition__getStoredResult(
+    skservice: Handle<ServiceDefinition>,
+    supplier: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): Nullable<ptr<Internal.CJSON>>;
+
   // Resource
 
   SkipRuntime_Resource__instantiate(
@@ -337,6 +354,7 @@ interface ToWasm {
   SkipRuntime_ServiceDefinition__fetch(
     skservice: Handle<ServiceDefinition>,
     supplier: ptr<Internal.String>,
+    dirName: ptr<Internal.String>,
     key: ptr<Internal.CJSON>,
   ): Handle<Promise<void>>;
 
@@ -447,6 +465,30 @@ export class WasmFromBinding implements FromBinding {
     ref: Handle<HandlerInfo<LazyCompute<K, V>>>,
   ): Pointer<Internal.LazyCompute> {
     return this.fromWasm.SkipRuntime_createLazyCompute(ref);
+  }
+
+  SkipRuntime_invalidateLazyKey(
+    dirName: string,
+    key: Pointer<Internal.CJSON>,
+  ): void {
+    this.fromWasm.SkipRuntime_invalidateLazyKey(
+      this.utils.exportString(dirName),
+      toPtr(key),
+    );
+  }
+
+  SkipRuntime_ServiceDefinition__getStoredResult(
+    skservice: Handle<ServiceDefinition>,
+    supplier: string,
+    key: Pointer<Internal.CJSON>,
+  ): Pointer<Internal.CJSON> | null {
+    return toNullablePointer(
+      this.fromWasm.SkipRuntime_ServiceDefinition__getStoredResult(
+        skservice,
+        this.utils.exportString(supplier),
+        toPtr(key),
+      ),
+    );
   }
 
   SkipRuntime_createExternalService(
@@ -997,12 +1039,28 @@ class LinksImpl implements Links {
   fetchOfServiceDefinition(
     skservice: Handle<ServiceDefinition>,
     supplier: ptr<Internal.String>,
+    dirName: ptr<Internal.String>,
     key: ptr<Internal.CJSON>,
   ): Handle<Promise<void>> {
     return this.tobinding.SkipRuntime_ServiceDefinition__fetch(
       skservice,
       this.utils.importString(supplier),
+      this.utils.importString(dirName),
       key,
+    );
+  }
+
+  getStoredResultOfServiceDefinition(
+    skservice: Handle<ServiceDefinition>,
+    supplier: ptr<Internal.String>,
+    key: ptr<Internal.CJSON>,
+  ): Nullable<ptr<Internal.CJSON>> {
+    return toNullablePtr(
+      this.tobinding.SkipRuntime_ServiceDefinition__getStoredResult(
+        skservice,
+        this.utils.importString(supplier),
+        key,
+      ),
     );
   }
 
@@ -1202,7 +1260,8 @@ class Manager implements ToWasmManager {
     toWasm.SkipRuntime_ServiceDefinition__shutdown =
       links.shutdownOfServiceDefinition.bind(links);
     toWasm.SkipRuntime_deleteService = links.deleteService.bind(links);
-
+    toWasm.SkipRuntime_ServiceDefinition__getStoredResult =
+      links.getStoredResultOfServiceDefinition.bind(links);
     // ChangeManager
 
     toWasm.SkipRuntime_ChangeManager__needInputReload =

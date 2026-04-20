@@ -29,7 +29,8 @@ binding.ts     ← déjà fait
 index.ts       ← ServiceDefinition.fetch + useLazyExternalResource ContextImpl
 FFI.sk         ← modifier fetchOfService signature + ExternLazyService
 Runtime.sk     ← ExternalServiceLazyCompute + useLazyExternalCollection
-tojs.cc        ← pont natif fetch
+tojs.cc        ← pont js -> skiplang
+fromjs.cc      ← pont skiplang -> js
 skipruntime_module.ts ← pont WASM fetch
 
 -------------------------------------------------------------------------------------------
@@ -65,54 +66,73 @@ Ajout des fonctions C++ et WASM pour useLazyExternalResource et fetch
 
 -------------------------------------------------------------------------------------------
 
-Flow index -> runtime
+- Le client demande "Paris" → il récupère {"type":"loading"} immédiatement
+- En parallèle, MeteoService.fetch() tourne en tâche de fond
+- Quand le fetch aboutit, callbacks.update([...]) est appelé
+- Stocke la valeur dans storedResults puis appelle invalidateLazyKey
+- Skip propage automatiquement : TLazyDir sait que CityMapper a lu cette clé, donc il re-déclenche mapEntry pour Paris
+- mapEntry refait meteo.getArray("Paris") → computeFor → getStoredResult → trouve la valeur → renvoie {"type":"value",...}
+- La EagerCollection cities est mise à jour avec la nouvelle valeur pour Paris
+- Le prochain snapshot du client récupère la value sans aucun re-fetch côté API
 
-index.ts (ContextImpl)
-    ↓ appelle this.refs.binding.SkipRuntime_Context__useExternalResource
-binding.ts
-    ↓ déclare le contrat
-        ↙ mode natif          ↘ mode WASM
-tojs.cc                skipruntime_module.ts
-    ↓                          ↓
-FFI.sk (@export)       FFI.sk (@export)
-    ↓
-Runtime.sk (useExternalCollection)
+WORKFLOW EXAMPLE AVEC UNE API METEO
 
--------------------------------------------------------------------------------------------
+Quelqu'un demande Paris - sens ascendant
 
-NOUVELLE LOGIQUE AVEC FETCH QUI FAIT TOUT ET INVALIDATE
 
-computeFor("Paris") appelé
+
+Utilisateur demande "Paris"
       ↓
-Retourne { type: "loading" } — mis en cache comme LDefined
+LazyCollection.getArray("Paris")          ← index.ts (LazyCollectionImpl)
+      ↓ cache vide
+computeFor("Paris") déclenché             ← Runtime.sk (ExternalServiceLazyCompute)
       ↓
-fetch("Paris") déclenché en async
+service.fetch("mock", "Paris") appelé     ← Runtime.sk → FFI.sk → index.ts (ServiceDefinition)
       ↓
-fetch termine avec "18°C"
+addSubscription(context, waitable)        ← Runtime.sk
       ↓
-invalidateLazyKey("Paris") appelé → LRemoved dans le cache
+retourne { type: "loading" }              ← Runtime.sk
       ↓
-Prochaine demande de "Paris" → computeFor rappelé
-      ↓
-Cette fois fetch a déjà la valeur → retourne { type: "value", payload: "18°C" }
+Utilisateur reçoit { type: "loading" }    ← index.ts (LazyCollectionImpl)
 
 -------------------------------------------------------------------------------------------
 
-LOGIQUE WORKFLOW FETCH
+Fetch renvoie 18°C
 
-Runtime.sk appelle fetchOfService(...)
+
+
+LazyExternalService.fetch complète        ← adaptateur (MockLazyService)
       ↓
-FFI.sk @cpp_extern traduit l'appel WASM
+callbacks.update(["18°C"]) appelé         ← index.ts (ServiceDefinition)
       ↓
-LinksImpl.fetchOfServiceDefinition(...)  ← ici
+ServiceDefinition stocke "Paris" → "18°C" ← index.ts (Map interne)
       ↓
-tobinding.SkipRuntime_ServiceDefinition__fetch(...)  ← index.ts
+invalidateLazyKey("Paris") appelé         ← index.ts → binding.ts → FFI.sk → Runtime.sk
       ↓
-ServiceDefinition.fetch(...)  ← index.ts
-      ↓
-LazyExternalService.fetch(...)  ← ton adaptateur
+Cache de TLazyDir vidé pour "Paris"       ← Runtime.sk (invalidateLazyKey)
 
 -------------------------------------------------------------------------------------------
+
+Quelqu'un re-demande Paris
+
+
+
+Utilisateur redemande "Paris"
+      ↓
+LazyCollection.getArray("Paris")          ← index.ts (LazyCollectionImpl)
+      ↓ cache vide (invalidé)
+computeFor("Paris") déclenché             ← Runtime.sk (ExternalServiceLazyCompute)
+      ↓
+service.getStoredResult("mock", "Paris")  ← Runtime.sk → FFI.sk → index.ts (ServiceDefinition)
+      ↓ valeur trouvée dans le Map
+retourne { type: "value", payload: "18°C" } ← Runtime.sk
+      ↓
+Utilisateur reçoit { type: "value", payload: "18°C" } ← index.ts
+
+-------------------------------------------------------------------------------------------
+
+
+
 
 Runtime.sk  ← 1. la vraie logique
 FFI.sk      ← 2. l'export vers l'extérieur  
@@ -126,31 +146,30 @@ make fmt-js pour formater tout
 make fmt-sk 
 
 
+
+BUILD
+make clean
+make
+npx tsx aaaa.ts
+npm run build
+make test-skipruntime-ts
+make build pour build natif
+
 3 etats
 1 loading
 1 error
 1 valeur
 
-skip runtime attend une valeur donc on doit definir une valeur d'attente
-enlever initlazy
-fetch prend un callback : update
-l'update set une valeur d'attente donc les 3 etats
-fetch renvoie promise void
-il doit y avoir une ft qui existe pour mettre a jour la valeur des lazy
-c'est quand tu demande a fetch une valeur qu'il fait ce qu'il faut (init une valeur, invalidate, ne rien faire...)
-
-donc modif logique fetch dans api et ffi et enlever initlazy
-
 ON EST EN SYNCHRONE
 
 
 
-type ALoading<T> = {type = "loading", payload = ?<T>}
-type AValue<T> = {type = "value", payload = <T>}
-type AError<T> = {type = "error", payload = ?<T>}
+-------------------------------------------------------------------------------------------
 
-resultat type AsyncResult<T> = ALoading<T> | AValue<T> | AError<T>
+TO DO
 
-createLazy (useLazyExternalRessource) (...) : Lazy
+- Mon sh ne marche pas avec le make de tests
+- Aller explorer les tests dans skipruntime-ts/tests pour faire une batterie de tests unitaires sur le lazy
+- Repasser dans ce que j'ai fait pour y ajouter des commentaires détaillés
 
-LazyCollection<K, AsyncResult V>
+Il doit manquer des trucs dans le makefile de Daniel parceque en changeant de container je pouvais plus build avec le sien

@@ -458,25 +458,27 @@ class ExternalServiceLazyCompute(
   service: Service,
   supplier: String,
 ) extends LazyCompute {
-  fun computeFor(
-    _self: LazyCollection,
-    key: SKJSON.CJSON,
-  ): Array<SKJSON.CJSON> {
-    getContext() match {
-    | Some(context) ->
-      waitable = this.service.fetch(this.supplier, key);
-      addSubscription(context, waitable);
-      Array[
-        SKJSON.CJObject(
-          SKJSON.CJFields::create(
-            Array[("type", SKJSON.CJString("loading"))],
-            x -> x,
-          ),
-        ),
-      ]
-    | _ -> invariant_violation("Store context must be specified.")
+  fun computeFor(self: LazyCollection, key: SKJSON.CJSON): Array<SKJSON.CJSON> {
+      getContext() match {
+      | Some(context) ->
+        this.service.getStoredResult(this.supplier, key) match {
+        | Some(values) ->                                         // already an AsyncResult (AValue or AError)
+          values                                                  // wrapping is done on typescript side
+        | None() ->                                               // no stored result, trigger async fetch
+          waitable = this.service.fetch(this.supplier, self.getId(), key);
+          addSubscription(context, waitable);
+          Array[
+            SKJSON.CJObject(
+              SKJSON.CJFields::create(
+                Array[("type", SKJSON.CJString("loading"))],
+                x -> x,
+              )
+            )
+          ]
+        }
+      | _ -> invariant_violation("Store context must be specified.")
+      }
     }
-  }
 
   fun getName(): String {
     `external_lazy_${this.supplier}`
@@ -491,18 +493,25 @@ class ExternalServiceLazyCompute(
 }
 
 /**
- * Invalidate a cached key in a lazy collection.
- * Marks the entry as removed so that the next request
- * for this key triggers a fresh call to computeFor.
- * Should be called after a fetch completes to replace
- * the loading state with the real value.
+ * Invalidate a cached key in a lazy collection inside an open context.
+ * Must be called from within a transaction (e.g. from runWithResult).
  */
+fun invalidateLazyKeyInContext(
+  context: mutable SKStore.Context,
+  dirName: SKStore.DirName,
+  key: SKJSON.CJSON,
+): void {
+  dir = context.unsafeGetLazyDir(dirName).typed();     // get the lazydir
+  dir.invalidateKey(JSONID(key), context);             // mark the key as removed
+}
 
+/**
+ * Invalidate a cached key in a lazy collection using the ambient context.
+ * Used by internal code already running inside a transaction.
+ */
 fun invalidateLazyKey(dirName: SKStore.DirName, key: SKJSON.CJSON): void {
   getContext() match {
-  | Some(context) ->
-    dir = context.unsafeGetLazyDir(dirName).typed(); // get the lazydir
-    dir.invalidateKey(JSONID(key), context) // invalidate the key in the lazydir
+  | Some(context) -> invalidateLazyKeyInContext(context, dirName, key)
   | _ -> invariant_violation("Store context must be specified.")
   }
 }

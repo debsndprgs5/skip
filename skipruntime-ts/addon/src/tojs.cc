@@ -27,6 +27,8 @@ SKReducer SkipRuntime_createReducer(int32_t ref);
 CJSON SkipRuntime_initService(SKService service);
 double SkipRuntime_closeService();
 char* SkipRuntime_Context__useLazyExternalResource(char* service, char* identifier, CJObject json);
+CJSON SkipRuntime_ServiceDefinition__getStoredResult(int32_t service, char* supplier, CJSON key);
+void SkipRuntime_invalidateLazyKey(char* dirName, CJSON key);
 double SkipRuntime_ServiceDefinition__fetch(int32_t service, char* supplier, CJObject key);
 CJArray SkipRuntime_Collection__getArray(char* collection, CJSON key);
 char* SkipRuntime_Collection__map(char* collection, SKMapper mapper);
@@ -253,6 +255,42 @@ void FetchOfServiceDefinition(const FunctionCallbackInfo<Value>& args) {
         ToSKString(isolate, args[1].As<String>()),
         args[2].As<External>()->Value());
     args.GetReturnValue().Set(Number::New(isolate, skresult));
+  });
+}
+
+void GetStoredResultOfServiceDefinition(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  HandleScope scope(isolate);
+  if (!args[0]->IsNumber() || !args[1]->IsString() || !args[2]->IsExternal()) {
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "Invalid parameters.")));
+    return;
+  }
+  NatTryCatch(isolate, [&args](Isolate* isolate) {
+    CJSON skresult = SkipRuntime_ServiceDefinition__getStoredResult(
+        args[0].As<Int32>()->Value(),
+        ToSKString(isolate, args[1].As<String>()),
+        args[2].As<External>()->Value());
+    if (skresult != nullptr) {
+      args.GetReturnValue().Set(External::New(isolate, skresult));
+    } else {
+      args.GetReturnValue().SetNull();
+    }
+  });
+}
+
+void InvalidateLazyKey(const FunctionCallbackInfo<Value>& args) {
+  Isolate* isolate = args.GetIsolate();
+  HandleScope scope(isolate);
+  if (!args[0]->IsString() || !args[1]->IsExternal()) {
+    isolate->ThrowException(Exception::TypeError(
+        FromUtf8(isolate, "Invalid parameters.")));
+    return;
+  }
+  NatTryCatch(isolate, [&args](Isolate* isolate) {
+    SkipRuntime_invalidateLazyKey(
+        ToSKString(isolate, args[0].As<String>()),
+        args[1].As<External>()->Value());
   });
 }
 
@@ -1057,6 +1095,10 @@ void GetToJSBinding(const FunctionCallbackInfo<Value>& args) {
               UseLazyExternalResourceOfContext);
   AddFunction(isolate, binding, "SkipRuntime_ServiceDefinition__fetch",
               FetchOfServiceDefinition);
+  AddFunction(isolate, binding, "SkipRuntime_ServiceDefinition__getStoredResult",
+            GetStoredResultOfServiceDefinition);
+  AddFunction(isolate, binding, "SkipRuntime_invalidateLazyKey",
+            InvalidateLazyKey);
   //
   AddFunction(isolate, binding, "SkipRuntime_createMapper", CreateMapper);
   AddFunction(isolate, binding, "SkipRuntime_createLazyCompute",

@@ -99,13 +99,15 @@ export interface ChangeManager {
 }
 
 export class ServiceDefinition {
+    private readonly storedResults = new Map<string, Json[]>();
+    private closed = false;
+
   constructor(
     private service: SkipService,
     private readonly externals: Map<string, ExternalService> = new Map(),
-    private readonly lazyExternals: Map<
-      string,
-      LazyExternalService
-    > = new Map(),
+    private readonly lazyExternals: Map<string, LazyExternalService> = new Map(),
+    private readonly invalidateLazyKey?: (dirName: string, key: Pointer<Internal.CJSON>) => void,
+    private readonly exportJSON?: (value: Json) => Pointer<Internal.CJSON>,
   ) {}
 
   buildResource(name: string, parameters: Json): Resource {
@@ -175,29 +177,58 @@ export class ServiceDefinition {
     this.externals.delete(`${external}/${instance}`);
   }
 
-  fetch(external: string, key: Json): Promise<void> {
-    if (!this.service.lazyExternalServices)
-      throw new Error(`No lazy external services defined.`);
-    const supplier = this.service.lazyExternalServices[external];
-    if (!supplier)
-      throw new Error(`Lazy external service '${external}' not exist.`);
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
+  fetch(external: string, dirName: string, key: Json): Promise<void> {
+      if (!this.service.lazyExternalServices)
+        throw new Error(`No lazy external services defined.`);
+      const supplier = this.service.lazyExternalServices[external];
+      if (!supplier)
+        throw new Error(`Lazy external service '${external}' not exist.`);
+      const cacheKey = `${external}/${JSON.stringify(key)}`;
+      const invalidate = () => {
+        if (this.invalidateLazyKey && this.exportJSON) {
+          this.invalidateLazyKey(dirName, this.exportJSON(key));
+        }
+      };
+      return new Promise((resolve) => {
+        setTimeout(() => {
         supplier
           .fetch(key, {
-            update: (_values) => {
-              throw new Error("not implemented");
+            update: (values): Promise<void> => {
+              if (this.closed) return Promise.resolve();
+              const result: AsyncResult<Json> = {
+                type: "value",
+                payload: values,
+              };
+              this.storedResults.set(cacheKey, [result as Json]);
+              invalidate();
+              return Promise.resolve();
             },
-            error: (_) => {},
           })
-          .then(resolve)
-          .catch(reject);
-      }, 0);
-    });
+          .catch((err: unknown) => {
+            if (this.closed) return;
+            const message =
+              err instanceof Error ? err.message : String(err);
+            const result: AsyncResult<Json> = {
+              type: "error",
+              payload: message,
+            };
+            this.storedResults.set(cacheKey, [result as Json]);
+            invalidate();
+          });
+        resolve();
+        }, 0);
+      });
+    }
+
+  getStoredResult(external: string, key: Json): Json[] | undefined {
+    return this.storedResults.get(
+      `${external}/${JSON.stringify(key)}`
+    );
   }
 
   async shutdown(): Promise<void> {
     const promises: Promise<void>[] = [];
+    this.closed = true;
 
     const uniqueServices = new Set(this.externals.values());
     if (this.service.externalServices) {
@@ -1268,13 +1299,29 @@ export class ToBinding {
 
   SkipRuntime_ServiceDefinition__fetch(
     skservice: Handle<ServiceDefinition>,
-    external: string,
+    supplier: string,
+    dirName: string,
     key: Pointer<Internal.CJSON>,
   ): Handle<Promise<void>> {
     const skjson = this.getJsonConverter();
     const service = this.handles.get(skservice);
     const jsonKey = skjson.importJSON(key, true) as Json;
-    return this.handles.register(service.fetch(external, jsonKey));
+    return this.handles.register(
+      service.fetch(supplier, dirName, jsonKey),
+    );
+  }
+
+  SkipRuntime_ServiceDefinition__getStoredResult(
+    skservice: Handle<ServiceDefinition>,
+    supplier: string,
+    key: Pointer<Internal.CJSON>,
+  ): Pointer<Internal.CJSON> | null {
+    const skjson = this.getJsonConverter();
+    const service = this.handles.get(skservice);
+    const jsonKey = skjson.importJSON(key, true) as Json;
+    const result = service.getStoredResult(supplier, jsonKey);
+    if (result === undefined) return null;
+    return skjson.exportJSON(result) as Pointer<Internal.CJSON>;
   }
 
   SkipRuntime_ServiceDefinition__shutdown(
@@ -1421,7 +1468,13 @@ export class ToBinding {
     this.setFork(null);
     const uuid = crypto.randomUUID();
     this.fork(uuid);
-    const definition = new ServiceDefinition(service);
+    const definition = new ServiceDefinition(
+      service,
+      new Map(),
+      new Map(),
+      this.binding.SkipRuntime_invalidateLazyKey.bind(this.binding),
+      this.json().exportJSON.bind(this.json()),
+    );
     const skservicehHdl = this.handles.register(definition);
     try {
       this.initializing = true;

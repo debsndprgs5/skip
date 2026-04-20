@@ -494,14 +494,12 @@ export interface LazyExternalService {
    * @param key - The key to fetch from the external resource.
    * @param callbacks - Callbacks to react on update/error.
    * @param callbacks.update - Update callback, not yet implemented.
-   * @param callbacks.error - Error callback.
    * @returns {void}
    */
   fetch(
     key: Json,
     callbacks: {
-      update: (values: Json[]) => Promise<void>; //not implemented yet
-      error: (error: unknown) => void;
+      update: (values: Json[]) => Promise<void>;
     },
   ): Promise<void>;
 
