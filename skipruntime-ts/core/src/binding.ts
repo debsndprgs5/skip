@@ -54,17 +54,6 @@ export interface FromBinding {
     ref: Handle<HandlerInfo<LazyCompute<K, V>>>,
   ): Pointer<Internal.LazyCompute>;
 
-  SkipRuntime_ServiceDefinition__getStoredResult(
-    skservice: Handle<ServiceDefinition>,
-    supplier: string,
-    key: Pointer<Internal.CJSON>,
-  ): Pointer<Internal.CJSON> | null;
-
-  SkipRuntime_invalidateLazyKey(
-    dirName: string,
-    key: Pointer<Internal.CJSON>,
-  ): void;
-
   // ExternalService
 
   SkipRuntime_createExternalService(
@@ -142,6 +131,11 @@ export interface FromBinding {
     key: Pointer<Internal.CJSON>,
   ): Pointer<Internal.CJArray<Internal.CJSON>>;
 
+  SkipRuntime_setLazyCollectionValue(
+    dirName: string,
+    key: Pointer<Internal.CJSON>,
+    values: Pointer<Internal.CJArray>,
+  ): void;
   // Notifier
 
   SkipRuntime_createNotifier<K extends Json, V extends Json>(

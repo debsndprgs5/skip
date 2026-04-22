@@ -460,22 +460,6 @@ void SkipRuntime_deleteReducer(uint32_t reducerId) {
                      argv);
 }
 
-CJSON SkipRuntime_ServiceDefinition__getStoredResult(uint32_t serviceId,
-                                                     char* supplier,
-                                                     CJSON key) {
-  Isolate* isolate = Isolate::GetCurrent();
-  HandleScope scope(isolate);
-  Local<Object> externFunctions = kExternFunctions.Get(isolate);
-  Local<Value> argv[3] = {
-      Number::New(isolate, serviceId),
-      FromUtf8(isolate, supplier),
-      External::New(isolate, key),
-  };
-  return CallJSNullableFunction(
-      isolate, externFunctions,
-      "SkipRuntime_ServiceDefinition__getStoredResult", 3, argv);
-}
-
 double SkipRuntime_ServiceDefinition__fetch(uint32_t serviceId,
                                             char* supplier,
                                             char* dirName,

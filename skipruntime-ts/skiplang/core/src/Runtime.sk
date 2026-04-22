@@ -448,11 +448,6 @@ fun createLazyCollection(compute: LazyCompute): LazyCollection {
 
 /**
  * LazyCompute implementation for external lazy services.
- * When a key is requested, immediately returns a loading state
- * and triggers an async fetch on the external service.
- * Once the fetch completes, the cached loading value must be
- * invalidated via invalidateLazyKey so the next request returns
- * the real value.
  */
 class ExternalServiceLazyCompute(
   service: Service,
@@ -461,21 +456,22 @@ class ExternalServiceLazyCompute(
   fun computeFor(self: LazyCollection, key: SKJSON.CJSON): Array<SKJSON.CJSON> {
       getContext() match {
       | Some(context) ->
-        this.service.getStoredResult(this.supplier, key) match {
-        | Some(values) ->                                         // already an AsyncResult (AValue or AError)
-          values                                                  // wrapping is done on typescript side
-        | None() ->                                               // no stored result, trigger async fetch
-          waitable = this.service.fetch(this.supplier, self.getId(), key);
-          addSubscription(context, waitable);
-          Array[
-            SKJSON.CJObject(
-              SKJSON.CJFields::create(
-                Array[("type", SKJSON.CJString("loading"))],
-                x -> x,
-              )
+        // Trigger async fetch. The Promise resolves immediately;
+        // it does NOT wait for the external service to respond.
+        // When data arrives, the TS side calls setLazyCollectionValue to write
+        // directly into this TLazyDir as LDefined.
+        waitable = this.service.fetch(this.supplier, self.getId(), key);
+        addSubscription(context, waitable);
+        // Return loading. Once setLazyCollectionValue writes the real value,
+        // this key becomes LDefined and Skip won't call computeFor again.
+        Array[
+          SKJSON.CJObject(
+            SKJSON.CJFields::create(
+              Array[("type", SKJSON.CJString("loading"))],
+              x -> x,
             )
-          ]
-        }
+          )
+        ]
       | _ -> invariant_violation("Store context must be specified.")
       }
     }
@@ -493,27 +489,19 @@ class ExternalServiceLazyCompute(
 }
 
 /**
- * Invalidate a cached key in a lazy collection inside an open context.
- * Must be called from within a transaction (e.g. from runWithResult).
+ * Write a value directly into a lazy collection.
+ * Called from the TS side (via fork/merge transaction) when async data arrives.
+ * Overwrites the current entry with LDefined(values, reads), preserving
+ * existing dependency tracking, then propagates via context.update().
  */
-fun invalidateLazyKeyInContext(
+fun setLazyCollectionValue(
   context: mutable SKStore.Context,
   dirName: SKStore.DirName,
   key: SKJSON.CJSON,
+  values: Array<SKJSON.CJSON>,
 ): void {
-  dir = context.unsafeGetLazyDir(dirName).typed();     // get the lazydir
-  dir.invalidateKey(JSONID(key), context);             // mark the key as removed
-}
-
-/**
- * Invalidate a cached key in a lazy collection using the ambient context.
- * Used by internal code already running inside a transaction.
- */
-fun invalidateLazyKey(dirName: SKStore.DirName, key: SKJSON.CJSON): void {
-  getContext() match {
-  | Some(context) -> invalidateLazyKeyInContext(context, dirName, key)
-  | _ -> invariant_violation("Store context must be specified.")
-  }
+  dir = context.unsafeGetLazyDir(dirName).typed();
+  dir.setValue(JSONID(key), values.map(v -> JSONFile(v)), context);
 }
 
 fun jsonExtract(from: SKJSON.CJObject, pattern: String): Array<SKJSON.CJSON> {

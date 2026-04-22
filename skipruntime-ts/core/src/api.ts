@@ -471,9 +471,9 @@ export interface ExternalService {
 
 export type ALoading<T> = { type: "loading"; payload?: T };
 export type AValue<T> = { type: "value"; payload: T };
-export type AError<T> = { type: "error"; payload?: T };
+export type AError = { type: "error"; payload?: string };
 
-export type AsyncResult<T> = ALoading<T> | AValue<T> | AError<T>;
+export type AsyncResult<T> = ALoading<T> | AValue<T> | AError;
 
 /**
  * Interface to a lazy external service.
@@ -488,18 +488,31 @@ export type AsyncResult<T> = ALoading<T> | AValue<T> | AError<T>;
 export interface LazyExternalService {
   /**
    * Fetch the values associated to a key from the external resource.
-   * Called by Skip when a lazy collection needs a value that is not yet cached.
-   * The result is returned asynchronously via the `update` callback.
+   * Called by the Skip runtime when a lazy collection needs a value that
+   * is not yet cached.
+   *
+   * IMPORTANT: The returned Promise must NOT wait for the external service
+   * to respond with data. It should resolve as soon as any necessary
+   * initialization is complete (or immediately if none is needed).
+   * The actual data must be delivered asynchronously via callbacks.update().
+   *
+   * Typical implementation:
+   * 
+   * async fetch(key: Json, callbacks: { update: (result: AsyncResult<Json[]>) => void }) {
+   *   this.callMyApi(key)
+   *     .then(data => callbacks.update({ type: "value", payload: [data] }))
+   *     .catch(err => callbacks.update({ type: "error", payload: err.message }));
+   * }
+   *
    *
    * @param key - The key to fetch from the external resource.
-   * @param callbacks - Callbacks to react on update/error.
-   * @param callbacks.update - Update callback, not yet implemented.
-   * @returns {void}
+   * @param callbacks - Callbacks to deliver results.
+   * @param callbacks.update - Deliver fetched result (value or error) for the key.
    */
   fetch(
     key: Json,
     callbacks: {
-      update: (values: Json[]) => Promise<void>;
+      update: (result: AsyncResult<Json[]>) => void;
     },
   ): Promise<void>;
 

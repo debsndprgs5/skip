@@ -97,16 +97,30 @@ class TLazyDir{
     (refCountsOpt, dirOpt)
   }
 
-  fun invalidateKey(key: Key, context: mutable Context): void {
-    this.data.maybeGet(key) match {
-    | Some(SKStore.LDefined(_, reads)) -> // if the key is cached, get the dependencies
-      !this.data[key] = SKStore.LRemoved(reads); // mark the key as removed, keep dependencies
-      context.updateDirtyReaders( // notify skip that the key has changed
-        SKStore.Path::create(this.dirName, key),
-      );
-      context.setDir(this) // set back the TLazyDir in context
-    | _ -> void
-    }
+/**
+   * Set a key directly to LDefined with new values, preserving existing
+   * dependency tracking (reads). Used when async data arrives from an
+   * external lazy service.
+   */
+  fun setValue(
+    key: Key,
+    values: Array<File>,
+    context: mutable Context,
+  ): void {
+    oldReads = this.data.maybeGet(key) match {
+    | Some(LDefined(_, r)) -> r
+    | Some(LRemoved(r)) -> r
+    | _ -> Array[]
+    };
+    arrow = TArrowKey::create{
+      parentName => this.dirName,
+      childName => this.dirName,
+      key,
+    };
+    context.removeDeps(arrow, oldReads.iterator());
+    !this.data[key] = LDefined(values, Array[]);
+    context.updateDirtyReaders(Path::create(this.dirName, key));
+    context.setDir(this)
   }
 
   protected fun removeKeys(keys: readonly Vector<Key>): this {

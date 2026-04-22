@@ -149,11 +149,15 @@ make fmt-sk
 
 BUILD
 make clean
-make
+make -f Makefile
 npx tsx aaaa.ts
 npm run build
 make test-skipruntime-ts
 make build pour build natif
+
+DANS RUNTIME-TS
+make build-examples
+make regen-example.ts pour reformer les .exp
 
 3 etats
 1 loading
@@ -173,3 +177,97 @@ TO DO
 - Repasser dans ce que j'ai fait pour y ajouter des commentaires détaillés
 
 Il doit manquer des trucs dans le makefile de Daniel parceque en changeant de container je pouvais plus build avec le sien
+
+
+1. getStoredResult disparaît. Le TLazyDir gère déjà le cache via LDefined. Si la clé est en LDefined, Skip retourne directement la valeur sans rappeler computeFor. Notre storedResults Map JS est un double cache inutile qui en plus crée une dépendance circulaire.
+
+2. Plus d'invalidation, on SET. Quand les données arrivent, au lieu de invalidateKey (LDefined → LRemoved) puis attendre un re-pull qui rappelle computeFor, on écrit directement la nouvelle valeur dans le TLazyDir : LDefined(nouvelles données, reads). C'est un "push" direct, pas un "invalidate + lazy re-compute".
+
+3. Transactions. L'écriture dans le TLazyDir doit passer par le pattern fork/merge comme CollectionWriter.update, pour ne pas avoir les races de transactions qu'on a eues.
+
+4. fetch ne doit PAS attendre le service. La Promise retournée par fetch sert à une éventuelle initialisation, pas à attendre la réponse API. fetch doit : lancer l'appel async (fire-and-forget), retourner immédiatement. Quand la réponse arrive → appeler update avec la valeur (ou l'erreur).
+
+5. Erreurs via update. Pas de callback error séparé (on l'a déjà viré). Mais en plus, même le .catch côté framework disparaît. L'erreur est gérée dans le fetch de l'example : callMeteoApi().then(value => update(value)).catch(err => update(errorValue)). Le type d'update accepte les erreurs.
+
+6. L'example se restructure. MeteoService.fetch fait : appeler une méthode privée callMeteoApi(key) (async, fait le vrai appel réseau), .then(result => callbacks.update(result)), .catch(err => callbacks.update(errorResult)). Le fetch lui-même resolve immédiatement.
+
+call api then catch
+
+
+- ||| fetch (api.ts + example) — changer la sémantique de la Promise, restructurer l'example avec callMeteoApi privé
+
+- ||| update côté framework (index.ts) — écrire directement dans le TLazyDir via le pattern fork/merge au lieu d'invalidateKey, virer storedResults
+
+- ||| computeFor (Runtime.sk) — simplifier, virer getStoredResult
+
+- ||| Nettoyage FFI — virer les exports devenus inutiles (getStoredResult, invalidateLazyKey), ajouter le set direct
+
+- ||| Nettoyage ponts (WASM module + tojs.cc/fromjs.cc) — aligner avec les nouveaux exports
+
+- ||| Mettre a jour fromBinding dans le binding.ts
+
+
+--------------------------------------------------------------------------------
+
+- pas besoin de getStoredResult, parceque si le result est deja dedans il va pas rappeler computefor, getstoredresult redondant
+car getStoredResult cree une dependance sur lui meme actuellement
+le fonctionnement interne du skip runtime gere deja le bordel
+
+- Il ne faut pas "invalider" une cle, il faut la re-set avec une nouvelle valeur.
+Au lieu de Lremoved, coller Ldefined avec une nouvelle valeur
+
+- pas de concurrence de transactions car synchrone
+dans update, je gere pas les transactions,
+il faut que je gere les transactions, equivalent du update de collectionwriter dans index
+
+- on attends pas le resultat avec fetch, le promise du fetch est si tu as besoin d'init, dans mon exemple je cree une promesse qui fait attendre le resultat, je resolve que si j'ai un update.
+j'attends encore l'update d'avant quand je resolve -> probleme
+je doit pas attendre le resultat sur le fetch. on doit pas attendre le resultat de l'api que j'attend
+quand j'appelle fetch il me faut : fetch then catch error
+le retour du FETCH ATTEND PAS LE SERVICE ---> a ecrire dans les commentaires de l'api.ts sur fetch
+c'est le vrai probleme du programme : promesse de fetch qui attend, ca marchait parceque je gerais pas les transac
+
+
+- pour les tests, si je veux une erreur genre berlin, je update en error
+
+
+- dans une methode separée dans mon example
+promise du fetch c'est pas l'attente du service que j'appelle, c'est pour attendre une eventuelle initialisation de quelque chose
+private call api ou callmeteo api, un call async exterieure. la methode fait exactement pareille que fetch sans le callback update
+dans le fetch je fait call api then update catch valeur et then update catch erreur
+au lieu de callback update, tu resolve ta valeur
+
+- update value est forcement un type erreur, donc on peut faire de update un type erreur
+
+
+--------------------------------------------------------------------------------
+
+
+transactions gerees dans setLazyValue
+
+
+data arrivent de l'API externe :
+Le callback update dans fetch est appelé avec le résultat (value ou error)
+Il appelle this.setLazyValue(dirName, key, [result])
+setLazyValue ouvre une transaction fork/merge côté TS
+À l'intérieur, il appelle SkipRuntime_setLazyCollectionValue via le binding
+Qui appelle exportSetLazyCollectionValue dans FFI.sk
+Qui appelle setLazyCollectionValue dans Runtime.sk
+Qui appelle dir.setValue(key, values, context) sur le TLazyDir
+Qui écrit LDefined(nouvelles valeurs) directement dans le TLazyDir
+Puis context.update() propage les changements
+
+
+--------------------------------------------------------------------------------
+
+UNIT TESTS
+
+testLazyExternalService_loading : on lit une clé immédiatement après le démarrage du service. Le fetch est async avec 50ms de delai, donc computeFor n'a pas encore reçu les données. On vérifie que le résultat est {type: "loading"}.
+
+testLazyExternalService_value : lit une clé (ce qui déclenche le fetch), puis attend 200ms pour que le setTimeout(50) se résolve et que setLazyCollectionValue écrive la valeur dans le TLazyDir. Relit ensuite la même clé et vérifie qu'on obtient {type: "value", payload: [{city: "Paris", temp: 20}]}.
+
+testLazyExternalService_error : même chose mais avec la clé "error_city" qui fait que le mock appelle callbacks.update({type: "error", ...}). Vérifie que l'erreur remonte correctement après le timeout.
+
+testLazyExternalService_multipleKeys : Déclenche 3 fetchs (Paris, London, error_city) puis attend. Vérifie que les 3 clés ont chacune leur valeur correcte.
+
+testLazyExternalService_cacheHit : Déclenche un fetch pour Paris, attend, puis relit Paris deux fois supplémentaires. On vérifie que fetchCount n'a pas augmenté — preuve que le TLazyDir sert son cache (LDefined) sans rappeler computeFor ni re-fetcher.

@@ -12,22 +12,20 @@ async function query(city: string): Promise<void> {
   console.log(JSON.stringify(result));
 }
 
-// First requests — expect loading
+// First requests — expect loading (fetchs need 3s, we arrive at ~1s)
 await query("Paris");
 await query("London");
 await query("Berlin");
 
 // Wait for fetches to resolve
-await sleep(1500);
+await sleep(4000);
 
 // Second requests — expect value or error
 await query("Paris");
 await query("London");
 await query("Berlin");
 await query("Tokyo");
+await query("Madrid");
 
-// Wait for Tokyo fetch
-await sleep(1500);
-
-// Tokyo should have value now
-await query("Tokyo");
+// Re-query error — should still be error (cache hit)
+await query("Berlin");

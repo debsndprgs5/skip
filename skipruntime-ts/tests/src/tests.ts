@@ -19,6 +19,8 @@ import type {
   Nullable,
   Reducer,
   ChangeManager,
+  AsyncResult,
+  LazyExternalService,
 } from "@skipruntime/core";
 import { LoadStatus } from "@skipruntime/core";
 import { Count, Sum } from "@skipruntime/helpers";
@@ -1010,6 +1012,91 @@ function lazyWithUseExternalServiceService(): SkipService<Input_NN, Input_NN> {
   };
 }
 
+//// testLazyExternalService
+
+  // Mock lazy external service for tests
+  class TestLazyMeteo implements LazyExternalService {
+    fetchCount = 0;
+
+    fetch(
+      key: Json,
+      callbacks: { update: (result: AsyncResult<Json[]>) => void },
+    ): Promise<void> {
+      this.fetchCount++;
+      setTimeout(() => {
+        if (key === "error_city") {
+          callbacks.update({ type: "error", payload: "City not found" });
+        } else {
+          callbacks.update({
+            type: "value",
+            payload: [{ city: key, temp: 20 }],
+          });
+        }
+      }, 50);
+      return Promise.resolve();
+    }
+
+    shutdown(): Promise<void> {
+      return Promise.resolve();
+    }
+  }
+
+  // Mapper that reads from the lazy collection
+  class TestLazyCityMapper
+    implements Mapper<string, string, string, AsyncResult<Json>>
+  {
+    constructor(
+      private readonly meteo: LazyCollection<string, AsyncResult<Json>>,
+    ) {}
+
+    mapEntry(
+      key: string,
+      _values: Values<string>,
+    ): Iterable<[string, AsyncResult<Json>]> {
+      const results = this.meteo.getArray(key);
+      if (results.length === 0) return [[key, { type: "loading" }]];
+      return [[key, results[0]!]];
+    }
+  }
+
+  type LazyTestInputs = { cities: EagerCollection<string, string> };
+  type LazyTestOutputs = {
+    cities: EagerCollection<string, AsyncResult<Json>>;
+  };
+
+  class LazyTestResource implements Resource<LazyTestOutputs> {
+    instantiate(cs: LazyTestOutputs): EagerCollection<Json, Json> {
+      return cs.cities as unknown as EagerCollection<Json, Json>;
+    }
+  }
+
+  function lazyTestService(
+    meteo: TestLazyMeteo,
+  ): SkipService<LazyTestInputs, LazyTestOutputs> {
+    return {
+      initialData: {
+        cities: [
+          ["Paris", ["Paris"]],
+          ["London", ["London"]],
+          ["error_city", ["error_city"]],
+        ] as Entry<string, string>[],
+      },
+      lazyExternalServices: { meteo },
+      resources: { cities: LazyTestResource },
+      createGraph(
+        inputs: LazyTestInputs,
+        context: Context,
+      ): LazyTestOutputs {
+        const meteoLazy = context.useLazyExternalResource<string, AsyncResult<Json>>({
+          service: "meteo",
+          identifier: "temperatures",
+        });
+        const cities = inputs.cities.map(TestLazyCityMapper, meteoLazy);
+        return { cities };
+      },
+    };
+  }
+
 //// testMapWithException
 
 class MapWithException implements Mapper<string, number, string, number> {
@@ -1844,6 +1931,99 @@ export function initTests(
       expect(await service.getArray("resource1", "1")).toEqual([30]);
       await service.update("input2", [["1", [40]]]);
       expect(await service.getArray("resource2", "1")).toEqual([40]);
+    } finally {
+      await service.close();
+    }
+  });
+//// for lazy external service testing
+    it("testLazyExternalService_loading", async () => {
+    const meteo = new TestLazyMeteo();
+    const service = await initService(lazyTestService(meteo));
+    try {
+      // First read should return loading (fetch is async, 50ms delay)
+      expect(await service.getArray("cities", "Paris")).toEqual([
+        { type: "loading" },
+      ]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("testLazyExternalService_value", async () => {
+    const meteo = new TestLazyMeteo();
+    const service = await initService(lazyTestService(meteo));
+    try {
+      // Trigger the fetch
+      await service.getArray("cities", "Paris");
+      // Wait for fetch to resolve
+      await timeout(200);
+      // Should now have the value
+      expect(await service.getArray("cities", "Paris")).toEqual([
+        { type: "value", payload: [{ city: "Paris", temp: 20 }] },
+      ]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("testLazyExternalService_error", async () => {
+    const meteo = new TestLazyMeteo();
+    const service = await initService(lazyTestService(meteo));
+    try {
+      // Trigger the fetch
+      await service.getArray("cities", "error_city");
+      // Wait for fetch to resolve
+      await timeout(200);
+      // Should have the error
+      expect(await service.getArray("cities", "error_city")).toEqual([
+        { type: "error", payload: "City not found" },
+      ]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("testLazyExternalService_multipleKeys", async () => {
+    const meteo = new TestLazyMeteo();
+    const service = await initService(lazyTestService(meteo));
+    try {
+      // Trigger fetches for all keys
+      await service.getArray("cities", "Paris");
+      await service.getArray("cities", "London");
+      await service.getArray("cities", "error_city");
+      // Wait for all fetches
+      await timeout(200);
+      // All should be resolved
+      expect(await service.getArray("cities", "Paris")).toEqual([
+        { type: "value", payload: [{ city: "Paris", temp: 20 }] },
+      ]);
+      expect(await service.getArray("cities", "London")).toEqual([
+        { type: "value", payload: [{ city: "London", temp: 20 }] },
+      ]);
+      expect(await service.getArray("cities", "error_city")).toEqual([
+        { type: "error", payload: "City not found" },
+      ]);
+    } finally {
+      await service.close();
+    }
+  });
+
+  it("testLazyExternalService_cacheHit", async () => {
+    const meteo = new TestLazyMeteo();
+    const service = await initService(lazyTestService(meteo));
+    try {
+      // Trigger + wait
+      await service.getArray("cities", "Paris");
+      await timeout(200);
+      // Read twice — fetchCount should not increase on second read
+      const countBefore = meteo.fetchCount;
+      await service.getArray("cities", "Paris");
+      await service.getArray("cities", "Paris");
+      expect(meteo.fetchCount).toEqual(countBefore);
+      // Value should still be correct
+      expect(await service.getArray("cities", "Paris")).toEqual([
+        { type: "value", payload: [{ city: "Paris", temp: 20 }] },
+      ]);
     } finally {
       await service.close();
     }

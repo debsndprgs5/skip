@@ -146,7 +146,6 @@ base class Service {
 
   //for Lazy service
   fun fetch(supplier: String, dirName: String, key: SKJSON.CJSON): Waitable;
-  fun getStoredResult(supplier: String, key: SKJSON.CJSON): ?Array<SKJSON.CJSON>;
 }
 
 value class Values(

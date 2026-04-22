@@ -99,15 +99,13 @@ export interface ChangeManager {
 }
 
 export class ServiceDefinition {
-    private readonly storedResults = new Map<string, Json[]>();
     private closed = false;
 
   constructor(
     private service: SkipService,
     private readonly externals: Map<string, ExternalService> = new Map(),
     private readonly lazyExternals: Map<string, LazyExternalService> = new Map(),
-    private readonly invalidateLazyKey?: (dirName: string, key: Pointer<Internal.CJSON>) => void,
-    private readonly exportJSON?: (value: Json) => Pointer<Internal.CJSON>,
+    private readonly setLazyValue?: (dirName: string, key: Json, values: Json[]) => void,
   ) {}
 
   buildResource(name: string, parameters: Json): Resource {
@@ -183,48 +181,34 @@ export class ServiceDefinition {
       const supplier = this.service.lazyExternalServices[external];
       if (!supplier)
         throw new Error(`Lazy external service '${external}' not exist.`);
-      const cacheKey = `${external}/${JSON.stringify(key)}`;
-      const invalidate = () => {
-        if (this.invalidateLazyKey && this.exportJSON) {
-          this.invalidateLazyKey(dirName, this.exportJSON(key));
-        }
-      };
       return new Promise((resolve) => {
         setTimeout(() => {
-        supplier
-          .fetch(key, {
-            update: (values): Promise<void> => {
-              if (this.closed) return Promise.resolve();
-              const result: AsyncResult<Json> = {
-                type: "value",
-                payload: values,
+          supplier
+            .fetch(key, {
+              update: (result: AsyncResult<Json[]>): void => {
+                if (this.closed) return;
+                if (this.setLazyValue) {
+                  this.setLazyValue(dirName, key, [result as Json]);
+                }
+              },
+            })
+            // .catch is here just as a security if user's fetch's throw instead of calling update with error
+            .catch((err: unknown) => {
+              if (this.closed) return;
+              const message =
+                err instanceof Error ? err.message : String(err);
+              const result: AsyncResult<Json[]> = {
+                type: "error",
+                payload: message,
               };
-              this.storedResults.set(cacheKey, [result as Json]);
-              invalidate();
-              return Promise.resolve();
-            },
-          })
-          .catch((err: unknown) => {
-            if (this.closed) return;
-            const message =
-              err instanceof Error ? err.message : String(err);
-            const result: AsyncResult<Json> = {
-              type: "error",
-              payload: message,
-            };
-            this.storedResults.set(cacheKey, [result as Json]);
-            invalidate();
-          });
-        resolve();
+              if (this.setLazyValue) {
+                this.setLazyValue(dirName, key, [result as Json]);
+              }
+            });
+          resolve();
         }, 0);
       });
     }
-
-  getStoredResult(external: string, key: Json): Json[] | undefined {
-    return this.storedResults.get(
-      `${external}/${JSON.stringify(key)}`
-    );
-  }
 
   async shutdown(): Promise<void> {
     const promises: Promise<void>[] = [];
@@ -1311,19 +1295,6 @@ export class ToBinding {
     );
   }
 
-  SkipRuntime_ServiceDefinition__getStoredResult(
-    skservice: Handle<ServiceDefinition>,
-    supplier: string,
-    key: Pointer<Internal.CJSON>,
-  ): Pointer<Internal.CJSON> | null {
-    const skjson = this.getJsonConverter();
-    const service = this.handles.get(skservice);
-    const jsonKey = skjson.importJSON(key, true) as Json;
-    const result = service.getStoredResult(supplier, jsonKey);
-    if (result === undefined) return null;
-    return skjson.exportJSON(result) as Pointer<Internal.CJSON>;
-  }
-
   SkipRuntime_ServiceDefinition__shutdown(
     skservice: Handle<ServiceDefinition>,
   ): Handle<Promise<unknown>> {
@@ -1468,12 +1439,33 @@ export class ToBinding {
     this.setFork(null);
     const uuid = crypto.randomUUID();
     this.fork(uuid);
+    const setLazyValue = (dirName: string, key: Json, values: Json[]): void => {
+      this.setFork(null);
+      const uuid = crypto.randomUUID();
+      this.fork(uuid);
+      try {
+        this.setFork(uuid);
+        this.runWithGC(() => {
+          const skjson = this.json();
+          return this.binding.SkipRuntime_setLazyCollectionValue(
+            dirName,
+            skjson.exportJSON(key),
+            skjson.exportJSON(values),
+          );
+        });
+        this.setFork(uuid);
+        this.merge();
+      } catch (ex) {
+        this.setFork(uuid);
+        this.abortFork();
+        throw ex;
+      }
+    };
     const definition = new ServiceDefinition(
       service,
       new Map(),
       new Map(),
-      this.binding.SkipRuntime_invalidateLazyKey.bind(this.binding),
-      this.json().exportJSON.bind(this.json()),
+      setLazyValue,
     );
     const skservicehHdl = this.handles.register(definition);
     try {

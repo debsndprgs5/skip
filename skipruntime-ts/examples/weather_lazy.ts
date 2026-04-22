@@ -19,26 +19,38 @@ const platform: "wasm" | "native" =
 // ─── Lazy External Service ────────────────────────────────────────────────────
 
 class MeteoService implements LazyExternalService {
-  constructor(private readonly delayMs: number = 500) {}
+  constructor(private readonly delayMs: number = 1500) {}
 
+  // The returned Promise does NOT wait for the API response.
+  // It resolves immediately. Data is delivered via callbacks.update().
   fetch(
     key: Json,
     callbacks: {
-      update: (values: Json[]) => Promise<void>;
+      update: (result: AsyncResult<Json[]>) => void;
     },
   ): Promise<void> {
+    this.callMeteoApi(key)
+      .then((data) => {
+        callbacks.update({ type: "value", payload: [data] });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        callbacks.update({ type: "error", payload: message });
+      });
+    return Promise.resolve();
+  }
+
+  // Simulates an external API call with a delay
+  private callMeteoApi(key: Json): Promise<Json> {
     return new Promise((resolve, reject) => {
       setTimeout(() => {
         if (key === "Berlin") {
           reject(new Error(`API error: city "${key}" not found`));
           return;
         }
-        console.error(`[DEBUG] MeteoService.fetch called: ${JSON.stringify(key)}`);
         const temperatures: Record<string, number> = { Paris: 18, London: 14, Tokyo: 27 };
         const temp = temperatures[key as string] ?? 20;
-        const result = { city: key, temperature: `${temp}°C` };
-        console.error(`[DEBUG] MeteoService callback firing: ${JSON.stringify(key)}`);
-        callbacks.update([result]).then(resolve).catch(reject);
+        resolve({ city: key, temperature: `${temp}°C` });
       }, this.delayMs);
     });
   }

@@ -249,14 +249,6 @@ native fun fetchOfService(
   key: SKJSON.CJSON,
 ): Float;
 
-@cpp_extern("SkipRuntime_ServiceDefinition__getStoredResult")
-@debug
-native fun getStoredResultOfService(
-  service: UInt32,
-  supplier: String,
-  key: SKJSON.CJSON,
-): ?SKJSON.CJSON;
-
 @cpp_extern("SkipRuntime_deleteLazyService")
 @debug
 native fun deleteLazyService(service: UInt32): void;
@@ -324,14 +316,6 @@ class ExternService(eptr: SKStore.ExternalPointer) extends Service {
 
   fun fetch(supplier: String, dirName: String, key: SKJSON.CJSON): Waitable {
     Waitable(fetchOfService(this.eptr.value, supplier, dirName, key))
-  }
-
-  fun getStoredResult(supplier: String, key: SKJSON.CJSON): ?Array<SKJSON.CJSON> {
-    getStoredResultOfService(this.eptr.value, supplier, key) match {
-    | Some(SKJSON.CJArray(values)) -> Some(values)
-    | Some(_) -> None()  // unexpected type
-    | None() -> None()
-    }
   }
 
   fun shutdown(): Waitable {
@@ -493,13 +477,20 @@ fun getArrayOfLazyCollection(lazy: String, key: SKJSON.CJSON): SKJSON.CJArray {
   SKJSON.CJArray(lazyForName(lazy).getArray(key))
 }
 
-@export("SkipRuntime_invalidateLazyKey")
-fun exportInvalidateLazyKey(dirName: String, key: SKJSON.CJSON): void {
+@export("SkipRuntime_setLazyCollectionValue")
+fun exportSetLazyCollectionValue(
+  dirName: String,
+  key: SKJSON.CJSON,
+  values: SKJSON.CJArray,
+): void {
   _ = runWithResult(context ~> {
-    SkipRuntime.invalidateLazyKeyInContext(
+    SkipRuntime.setLazyCollectionValue(
       context,
       SKStore.DirName::create(dirName),
       key,
+      values match {
+      | SKJSON.CJArray(vs) -> vs
+      },
     )
   });
 }
@@ -657,6 +648,8 @@ fun createResourceOfRuntime(
 @export("SkipRuntime_Runtime__getAll")
 fun getAllOfRuntime(resource: String, params: SKJSON.CJSON): SKJSON.CJSON {
   runWithResult(context ~> {
+    /* Propagate any pending lazy value updates before reading */
+    context.update();
     res = getAll(context, resource, params);
     /* Ensure all resources closed at right time */
     updateContext(context);
@@ -677,6 +670,8 @@ fun getForKeyOfRuntime(
   key: SKJSON.CJSON,
 ): SKJSON.CJSON {
   runWithResult(context ~> {
+    /* Propagate any pending lazy value updates before reading */
+    context.update();
     res = getForKey(context, resource, params, key);
     /* Ensure all resources closed at right time */
     updateContext(context);
