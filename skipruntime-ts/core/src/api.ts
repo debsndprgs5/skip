@@ -491,19 +491,10 @@ export interface LazyExternalService {
    * Called by the Skip runtime when a lazy collection needs a value that
    * is not yet cached.
    *
-   * IMPORTANT: The returned Promise must NOT wait for the external service
+   * The returned Promise must NOT wait for the external service
    * to respond with data. It should resolve as soon as any necessary
    * initialization is complete (or immediately if none is needed).
    * The actual data must be delivered asynchronously via callbacks.update().
-   *
-   * Typical implementation:
-   * 
-   * async fetch(key: Json, callbacks: { update: (result: AsyncResult<Json[]>) => void }) {
-   *   this.callMyApi(key)
-   *     .then(data => callbacks.update({ type: "value", payload: [data] }))
-   *     .catch(err => callbacks.update({ type: "error", payload: err.message }));
-   * }
-   *
    *
    * @param key - The key to fetch from the external resource.
    * @param callbacks - Callbacks to deliver results.

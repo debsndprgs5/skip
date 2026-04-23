@@ -174,7 +174,25 @@ export class ServiceDefinition {
     supplier.unsubscribe(instance);
     this.externals.delete(`${external}/${instance}`);
   }
-
+  
+  /**
+   * Fetch a value for a lazy external service key.
+   * Called by the Skip runtime (via computeFor) when a lazy collection
+   * needs a value that is not yet cached.
+   *
+   * The returned Promise resolves immediately (via setTimeout(0)) —
+   * it does NOT wait for the external service to respond.
+   * When the external service responds, the update callback writes
+   * the result directly into the TLazyDir via setLazyValue (fork/merge).
+   *
+   * The .catch is a safety net: if the user's fetch implementation
+   * throws instead of calling callbacks.update with an error result,
+   * we catch it and write the error into the lazy collection ourselves.
+   *
+   * @param external - Name of the lazy external service.
+   * @param dirName - DirName of the TLazyDir to write into.
+   * @param key - The key being fetched.
+   */
   fetch(external: string, dirName: string, key: Json): Promise<void> {
       if (!this.service.lazyExternalServices)
         throw new Error(`No lazy external services defined.`);

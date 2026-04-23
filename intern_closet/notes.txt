@@ -146,6 +146,7 @@ make fmt-js pour formater tout
 make fmt-sk 
 
 
+docker run -it --rm -v $(pwd):/workspace -w /workspace skip-engine bash 
 
 BUILD
 make clean
@@ -271,3 +272,19 @@ testLazyExternalService_error : même chose mais avec la clé "error_city" qui f
 testLazyExternalService_multipleKeys : Déclenche 3 fetchs (Paris, London, error_city) puis attend. Vérifie que les 3 clés ont chacune leur valeur correcte.
 
 testLazyExternalService_cacheHit : Déclenche un fetch pour Paris, attend, puis relit Paris deux fois supplémentaires. On vérifie que fetchCount n'a pas augmenté — preuve que le TLazyDir sert son cache (LDefined) sans rappeler computeFor ni re-fetcher.
+
+
+--------------------------------------------------------------------------------
+
+regarder Nouvelle API node, adapter skip a la nouvelle api node
+la partie cpp au lieu d'utiliser le v8, attaquer la nouvelle api genre napi, chercher node cpp api
+en faisant le moins de taff possible
+
+pas de multi threading - important - car probleme potentiel de mono-threading - je vais me bruler les ailes
+
+ne pas chercher a optimiser
+
+
+--------------------------------------------------------------------------------
+
+Passer dans toute mon implem pour commenter / clean
