@@ -15,7 +15,7 @@ void SKIP_SKJSON_addToCJArray(PartialCJArr arr, CJSON value);
 CJArray SKIP_SKJSON_endCJArray(PartialCJArr arr);
 // primitives
 CJSON SKIP_SKJSON_createCJNull();
-CJSON SKIP_SKJSON_createCJInt(int64_t v);
+CJSON SKIP_SKJSON_createCJInt(double v);
 CJSON SKIP_SKJSON_createCJFloat(double v);
 CJSON SKIP_SKJSON_createCJString(char* str);
 CJSON SKIP_SKJSON_createCJBool(bool v);
@@ -161,12 +161,12 @@ Napi::Value CreateCJInt(const Napi::CallbackInfo& info) {
   }
   Napi::Value result;
   NatTryCatch(env, [&result, &info, env](Napi::Env) {
-    int64_t skvalue;
+    double skvalue;
     if (info[0].IsNumber()) {
-      skvalue = (int64_t)info[0].As<Napi::Number>().DoubleValue();
+      skvalue = info[0].As<Napi::Number>().DoubleValue();
     } else {
       bool lossless;
-      skvalue = info[0].As<Napi::BigInt>().Int64Value(&lossless);
+      skvalue = (double)info[0].As<Napi::BigInt>().Int64Value(&lossless);
     }
     CJSON skint = SKIP_SKJSON_createCJInt(skvalue);
     result = Napi::External<void>::New(env, skint);
