@@ -146,6 +146,8 @@ make fmt-js pour formater tout
 make fmt-sk 
 
 
+docker run -it --rm -v $(pwd):/workspace -w /workspace skip-engine bash
+
 
 BUILD
 make clean
@@ -154,6 +156,7 @@ npx tsx aaaa.ts
 npm run build
 make test-skipruntime-ts
 make build pour build natif
+make test-sk-testMap1
 
 DANS RUNTIME-TS
 make build-examples
@@ -271,3 +274,298 @@ testLazyExternalService_error : même chose mais avec la clé "error_city" qui f
 testLazyExternalService_multipleKeys : Déclenche 3 fetchs (Paris, London, error_city) puis attend. Vérifie que les 3 clés ont chacune leur valeur correcte.
 
 testLazyExternalService_cacheHit : Déclenche un fetch pour Paris, attend, puis relit Paris deux fois supplémentaires. On vérifie que fetchCount n'a pas augmenté — preuve que le TLazyDir sert son cache (LDefined) sans rappeler computeFor ni re-fetcher.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+----------------------------------------------------------------- Migration node-addon-api ---------------------------------------------------------------------
+
+regarder Nouvelle API node, adapter skip a la nouvelle api node
+la partie cpp au lieu d'utiliser le v8, attaquer la nouvelle api genre napi, chercher node cpp api
+en faisant le moins de taff possible
+
+pas de multi threading - important - car probleme potentiel de mono-threading - je vais me bruler les ailes
+
+ne pas chercher a optimiser
+
+--------------------------------------------------------------------------------
+
+-------> on part sur NAPI_VERSION=9 + node-addon-api ^8.7.0. 
+
+node-addon-api ^8.7.0 -- derniere version de node-addon-api a ce jour
+
+
+quelle version de C++ on utilises ? une norme genre c++17 ?
+
+node-addon-api en 8.7 parce que c'est la dernière stable et que c'est une dépendance de build. NAPI_VERSION=9 parce que c'est la plus récente qui reste installable sur toutes les Node.js en LTS actif — la 10 exigerait Node 22.14 minimum, ce qui couperait Node 20
+
+
+------------------------------------------------------------------------------------------------------
+MIGRATION PLAN 
+
+- binding.gyp     | DONE
+- package.json    | DONE
+- common.cc/h     | DONE
+- cjson.cc/h      | DONE
+- fromjs.cc/h     | DONE
+- tojs.cc/h       | DONE
+- main.cc         | DONE
+
+------------------------------------------------------------------------------------------------------
+MIGRATION PATTERN
+-> voir img dans intern closet
+
+Napi::Env porte le contexte. En V8, on devait souvent écrire isolate->GetCurrentContext() pour obtenir le contexte courant. En node-addon-api, Napi::Env contient déjà cette information, donc tout est simplifié.
+
+RAII au lieu de Local<T> + HandleScope. Les types Napi gèrent leur propre durée de vie. On ne déclares plus de HandleScope scope(isolate) en début de fonction, le wrapper s'en occupe automatiquement via Napi::CallbackInfo.
+
+Les valeurs portent leur env. Napi::Value, Napi::Object, etc. contiennent une référence implicite à leur Napi::Env. Donc dès qu'on passe une Napi::Value à une fonction, pas besoin de lui passer aussi l'env — elle est accessible via .Env().
+
+Moins d'indirections. Plus de Template intermédiaire, plus de Context explicite — l'API expose directement le niveau où on travailles.
+
+Les erreurs passent par exceptions, pas par types encapsulés. MaybeLocal<T> + .ToLocalChecked() + Maybe<bool> + .FromJust() → tout disparaît au profit du modèle exception standard C++. Ton code ressemble à du code C++ normal au lieu de ressembler à du Java verbalisé.
+
+Les conversions courantes sont implicites. const char* → Napi::String, int → Napi::Number, etc. On as plus à envelopper chaque valeur primitive avant de la passer.
+
+isolate->GetCurrentContext()->Global() → env.Global(). Accès au global en une étape.
+
+obj->Get(context, FromUtf8(isolate, "key")).ToLocalChecked() → obj.Get("key"). Les accès de propriétés par clé string sont plus directs.
+
+Les casts .As<T>() restent nécessaires quand on veux passer d'une Napi::Value générique à un type précis (Napi::Object, Napi::Function, etc.). Pas de magie.
+
+function.Call(recv, std::vector<napi_value>) remplace le couple argc/argv. Les initializer lists {val1, val2} marchent directement.
+
+Les erreurs se propagent par exceptions C++ au lieu de crasher le process via .ToLocalChecked(). C'est plus sûr par défaut.
+
+v8::TryCatch + HasCaught() → try { ... } catch (const Napi::Error& e) { ... }. Le modèle V8 "exception en attente" disparaît au profit du modèle C++ standard.
+
+tryCatch.Exception() → e.Value(). Récupère la valeur JS sous-jacente à l'exception.
+
+IsNativeError() n'a pas d'équivalent direct. On teste .Get("stack").IsString() comme substitut pragmatique.
+
+GetConstructorName() → .Get("name"). On passe par la propriété JS standard.
+
+Exception::Error(msg) → Napi::Error::New(env, msg). Construction d'un objet Error JS depuis C++.
+
+exc->Set(context, key, value).FromJust() → obj.Set(key, value). Même simplification que pour les autres accès de propriétés, plus de context explicite, plus de déballage.
+
+isolate->ThrowException(error) → error.ThrowAsJavaScriptException(). L'idiome node-addon-api pour lever une exception JS depuis C++.
+
+Le mode NAPI_CPP_EXCEPTIONS simplifie NatTryCatch mais ne le rend pas inutile. Les exceptions C++ non-Napi (SkipException, std::exception) doivent encore être attrapées et converties manuellement.
+
+napiError.Value() retourne directement une Napi::Object parce qu'une Error JS est un objet. Pas besoin de cast .As<Napi::Object>().
+
+pour fromjs, Persistant object :
+// V8
+static Persistent<Object> kExternFunctions;
+kExternFunctions.Reset(isolate, externFunctions);  // pour assigner
+Local<Object> obj = kExternFunctions.Get(isolate);  // pour récupérer
+
+// Napi
+static Napi::ObjectReference kExternFunctions;
+kExternFunctions = Napi::Persistent(externFunctions);  // pour assigner
+Napi::Object obj = kExternFunctions.Value();  // pour récupérer
+
+aucun equivalent dans la nouvelle api a Isolate* isolate = Isolate::GetCurrent() , donc on va recuperer l'env depuis la reference elle meme, car
+Napi::ObjectReference porte son propre env.
+
+------------------------------------------------------------------------------------------------------
+
+1 - Napi::Env remplace à la fois Isolate* et le Context. Quand on voyais isolate->GetCurrentContext()->machin(), maintenant juste env.machin().
+et aussi les objets (style Napi::Value, Napi::Object, etc.) contiennent maintenant une référence implicite à leur Napi::Env.
+-----------------
+
+2 - Les erreurs passent par exceptions C++ standard. Plus de valeurs "peut-être absentes" à déballer, plus de TryCatch en attente — du vrai try/catch C++.
+
+Anciennement en v8 pour les erreurs structurelles (propriete manquante, cast impossible), ca retournait MaybeLocal qui pouvait etre soit vide soit rempli, en fonction de si ca avait fonctionné en js ; il y avait des ToLocalChecked() partout mais sans verifier avant que c'etait rempli, bcp de crash potentiels.
+
+Et pour les exceptions javascript explicites, vous utilisiez des try catch apres un call pour savoir si il avait echoué (enfin si il y a eu une exception) avec genre .hasCaught, donc ca oblige a faire des try catch systematiquement apres chaque call...
+
+Maintenant, tout se simplifie beaucoup : toute exception coté JS devient une exception coté C++ grace au type Napi::Error, donc un seul try catch, try le call, catch Napi::Error.
+et pour le cas MaybeLocal, il disparait, et a la place il renvoie soit Napi::Value soit il throw une Napi::Error.
+-----------------
+
+3 - Beaucoup de méthodes Napi acceptent directement les types C++ bruts (const char*, std::string, int, double). Là où V8 forçait à passer par un objet Local<String> ou Local<Number> intermédiaire, Napi propose des surcharges qui font la conversion en interne. Le code devient plus court et plus lisible.
+-----------------
+
+4 - Pour convertir une Napi::Value générique en type précis, deux outils : .As<Napi::Machin>() quand on est sûr du type (ou après un test IsMachin()), et .ToString() / .ToNumber() quand on veux forcer la conversion avec coercion.
+-----------------
+
+5 - Disparition des helpers de conversion manuels (FromUtf8...). Les constructeurs Napi (Napi::String::New, etc.) font le job directement.
+-----------------
+
+6 - Disparition des HandleScope manuels. En V8, chaque fonction qui manipulait des objets JS devait ouvrir un HandleScope en début de fonction pour structurer la durée de vie des références côté garbage collector. En Napi, ces scopes sont gérés automatiquement par le wrapper. Ca fait une ligne en moins par fonction sur tout le code, et un risque de bug en moins (oublier le handlescope)
+-----------------
+
+7 - Les exceptions C++ Napi reposent sur la macro NAPI_CPP_EXCEPTIONS (activée dans binding.gyp). Cette option permet aux erreurs JS d'être propagées comme exceptions C++ standard. Sans cette option, il faudrait revenir à un modèle proche de V8 (vérification manuelle de IsExceptionPending après chaque appel).
+-----------------
+
+8 - Napi exige un retour de Napi::value ; 
+Dans v8, on utilisait args.GetReturnValue().Set pour return, en mettant le result dans un objet filé par le moteur, et donc jamais de return, toujours void
+Maintenant, on peut return directement, et Napi attend un retour dans tout les cas, donc meme sur du void pur sans retour, ca devient un Napi::value, quitte a retourner env.Undefined()
+
+------------------------------------------------------------------------------------------------------
+
+CHOIX DISCUTABLES
+
+Pour toute la migration, j'ai choisi de ne pas utiliser de "using" contrairement a avant, parceque utiliser les Napi::XXXX permet de mieux voir les changements de fonctionnements et de types de la nouvelle API. 
+
+
+common.cc
+- Refactorisation des Trycatch avec HandleJSException
+- V8 a IsNativeError() pour détecter proprement les erreurs JS standard, node-addon-api ne l'a pas. Je choisis de tester stack.IsString() comme approximation pratique. C'est un détail qui n'affecte que les cas tordus (exceptions bizarres non-standard).
+- Suppression de FromUtf8, car avec la nouvelle API, plus besoin, ca complexifie juste la signature en wrappant Napi::String::New(env, str)
+- Dans JSCheckFunction, j'utilise .ThrowAsJavaScriptException() au lieu de throw dans le reste des fonctions, specifiquement car JSCheckFunction retourne un bool, donc la fonction continue apres un throw pour faire return false.
+Avec throw, le return false ne serait jamais atteint, .ThrowAsJavaScriptException() permet de continuer l'exec
+
+cjson.cc
+Dans CreateCJInt, j'ai préservé le comportement V8 d'origine. Le code historique tronquait silencieusement, j'ai conservé cette sémantique pour éviter d'introduire un comportement nouveau pendant la migration :  déclaré bool lossless; mais je ne le lis jamais. On pourrait ajouter un check d'overflow et error si bigint depasse int64_t
+
+main.cc
+Utilisation de skbinding::AddFunction, plutot que exports.set direct, car c'est un helper qu'on utilise partout dans le reste du code et qui permet de remplacer
+exports.Set("runWithGC", Napi::Function::New(...))
+
+tojs.cc
+- BigInt::Int64Value(&lossless) sans vérification de lossless. Identique à CreateCJInt dans cjson.cc. Préservation du comportement V8 d'origine qui tronquait silencieusement.
+- 
+
+quelle version de napi bun supporte
+
+fixé 10 commentaires incoherents/incorrects
+
+
+En gros il y avait un probleme d'incoherence entre la declaration de la fonction coté cpp et sa vraie signature coté skip.
+Côté C++; on déclarait SKIP_SKJSON_createCJInt(int64_t v) — comme si la fonction prenait un entier.
+Mais en allant voir le code Skiplang dans Extern.sk, j'ai vu qu'elle est définie comme prenant un Float, pas un Int.
+
+Vu que les int et les float ne passent pas par les memes registres, int64 passe dans RDI, double passe dans XMM0. Cpp envoyait la valeur dans RDI, skip allait la chercher dans XMM0 qui ducoup contenait n'importe quoi, et qui interpretait ca en 0. 
+
+Pour confirmer, j'ai envoyé 0xDEADBEEF et j'ai vu qu'elle arrivait quand meme comme 0, donc les bits ne sont pas tronqués mais completement perdus en route, et ca explique aussi pourquoi
+les strings passaient sans probleme, parceque un char* est un pointeur, donc passé dans le meme registre entier des deux cotés.
+Pour fix, j'ai passé int64 en double dans la declaration extern C, et dans CreateCJInt on converti en double au lieu de int64.
+
+
+
+
+faire la chaine native BUN
+bun wasm on s'en fout
+bun natif on supporte pas pour le moment
+quand je teste avec bun, lance sur la version d'origine et pas sur la version compilé
+lance sur src pas sur dist
+
+probleme d'acces de fichier
+
+regarde repertoir circleCI, regarder les conf circleCI et faire une route pour les tests bun natif
+
+
+Étape 1 — Installer Bun et tester qu'il charge l'addon natif.
+npm install -g bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+Étape 2 — Faire tourner UN test unitaire sur Bun en mode src. Le plus simple, juste pour valider la chaîne. Genre testMap1.
+fichier test_bun.ts
+const skipNative = require("/workspace/skipruntime-ts/addon/build/Release/skip_runtime.node");
+console.log("Addon chargé !");
+console.log("Fonctions exportées:", Object.keys(skipNative));
+
+LD_LIBRARY_PATH=/workspace/build/skipruntime bun run /tmp/test_bun.ts
+
+Étape 3 — Faire tourner TOUS les tests unitaires sur Bun.
+Étape 4 — Faire tourner UN exemple sur Bun en mode src. Probablement database qui est le plus simple.
+Étape 5 — Faire tourner tous les exemples.
+Étape 6 — Cleaner les Makefile, intégrer Bun proprement.
+
+
+Architecture des packages :
+
+@skipruntime/native est un alias (symlink) vers /workspace/skipruntime-ts/addon
+Quand on fais import { initService } from "@skipruntime/native", Node résout vers /workspace/skipruntime-ts/addon/dist/index.js (a cause de "exports": { ".": "./dist/index.js" } dans le package.json)
+C'est le fichier index.js compilé qui à son tour charge l'addon .node natif
+
+
+Chaine actuelle pour node
+
+make test-skipruntime-ts
+  → npm install (linke les workspaces)
+  → tsc partout (tests, examples, native, etc.)
+  → mocha (lit dist/**/*.spec.js)
+  → scripts shell (lancent node dist/*.js)
+
+
+Chaine voulue pour bun
+bun → src/addon.spec.ts → src/index.ts (du package addon) → skip_runtime.node
+
+pour lancer unit tests avec bun 
+cd /workspace/skipruntime-ts/tests
+LD_LIBRARY_PATH=/workspace/build/skipruntime \
+  bun --bun /workspace/node_modules/.bin/mocha \
+    --no-config \
+    src/addon.bun.spec.ts
+
+pour lancer les examples avec bun
+cd /workspace/skipruntime-ts/tests/examples/bun
+LD_LIBRARY_PATH=/workspace/build/skipruntime ./run_examples.sh
+
+
+
+Je vais faire un .sh qui lance les tests de maniere parametré et plus generalisée que les .sh séparés actuels.
+gardons les .sh actuels en legacy pour l'instant
+
+./run_examples.sh -> sans arguments, lance tout les examples
+./run_examples.sh 
+
+j'ai dû exclure le fichier Bun de la compilation TypeScript pour qu'il n'interfère pas avec le pipeline mocha existant
+
+j'ai pensé pendant un temps que Bun avait un bug de race condition sur remote, mais en fait c'est une sortie valide alternative que le pipeline Node gère avec un fichier .exp.out.alt
+
+
+lancer unit test bun
+cd /workspace/skipruntime-ts/tests
+LD_LIBRARY_PATH=/workspace/build/skipruntime  bun --bun /workspace/node_modules/.bin/mocha --config .mocharc.bun.json
+
+lancer exemples sous bun
+cd /workspace/skipruntime-ts/tests/examples/bun
+  LD_LIBRARY_PATH=/workspace/build/skipruntime ./run_examples.sh
+
+test-bun-unit
+test-bun-examples
+test-skipruntime-ts-bun
+
+
+
+
+
+regarder Ressources partagées dans les ressources du skipruntime
+
+faut que quand tu cree une ressource tu declare des ressources qu'elle peut utiliser
+ca impacte quoi/qui

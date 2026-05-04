@@ -12,7 +12,24 @@ const service = new SkipServiceBroker({
   streaming_port: 8080,
 });
 
-import Database from "better-sqlite3";
+/*****************************************************************************/
+// Conditional database driver loading: bun:sqlite under Bun, better-sqlite3 under Node
+/*****************************************************************************/
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getDatabase(): Promise<any> {
+  // @ts-expect-error - Bun is not typed in a Node environment
+  if (typeof Bun !== "undefined") {
+    // @ts-expect-error - bun:sqlite is only available under Bun
+    const mod = await import("bun:sqlite");
+    return mod.Database;
+  } else {
+    const mod = await import("better-sqlite3");
+    return mod.default;
+  }
+}
+
+const Database = await getDatabase();
 
 type User = {
   name: string;
@@ -54,11 +71,8 @@ app.put("/user/:id", (req, res) => {
 
   try {
     db.prepare(
-      "INSERT OR REPLACE INTO data (id, object) VALUES ($id, $object)",
-    ).run({
-      id: key,
-      object: JSON.stringify(data),
-    });
+      "INSERT OR REPLACE INTO data (id, object) VALUES (?, ?)",
+    ).run(key, JSON.stringify(data));
 
     service
       .update("users", [[key, [data]]])
@@ -79,7 +93,7 @@ app.delete("/user/:id", (req, res) => {
   const key = req.params.id;
 
   try {
-    db.prepare("DELETE FROM data WHERE id = $id").run({ id: key });
+    db.prepare("DELETE FROM data WHERE id = ?").run(key);
 
     service
       .deleteKey("users", key)
